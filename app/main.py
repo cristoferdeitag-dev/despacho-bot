@@ -1,0 +1,301 @@
+import logging
+import re
+import time
+from fastapi import FastAPI, HTTPException, Header
+from app.config import settings
+from app.models import ManychatWebhookPayload
+from app.supabase_client import (
+    get_or_create_customer,
+    get_conversation_history,
+    save_message,
+    block_customer,
+    is_blocked,
+    get_user_messages_since_last_assistant,
+    get_latest_user_message_id,
+    has_assistant_reply_after,
+    update_customer_phone,
+    update_customer_stage,
+    create_escalation,
+)
+from app.claude_client import generate_reply
+from app.manychat_client import set_bot_reply, notify_admin, set_conversation_ended, apply_tag
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("despacho-bot")
+
+app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
+
+# Segundos a esperar antes de procesar, para agregar mensajes fragmentados.
+# Tiene que caber dentro del timeout de 10s del External Request de ManyChat.
+# Con 3s + Claude (~3-5s) terminamos en ~8s, suficiente margen.
+DEBOUNCE_SECONDS = 3.0
+
+BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
+ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
+PHONE_SAVE_PATTERN = re.compile(r"\[SAVE:phone:([+0-9\s\-()]+)\]")
+BOLD_MARKDOWN_PATTERN = re.compile(r"\*\*(.+?)\*\*")
+WHATSAPP_BOLD_PATTERN = re.compile(r"(?<!\S)\*([^\n*]+?)\*(?!\S)")
+
+# Mapping de categoría de escalation → tags de ManyChat (los tags reales del workspace 110240088419870)
+ESCALATION_TAGS = {
+    "INTERESADO": ["Interesado", "ANÁLISIS FISCAL PENDIENTE"],
+    "REGULARIZACION": ["Interesado", "REGULARIZACIÓN", "ANÁLISIS FISCAL PENDIENTE"],
+    "SEGUIMIENTO": ["Seguimiento"],
+    "NO_INTERESADO": ["No Interesado"],
+    "CLIENTE": ["CLIENTE", "IMPORTANTE"],
+}
+
+# Categorías que disparan notificación al equipo del despacho (vía notify_admin)
+ESCALATION_NOTIFY = {"INTERESADO", "REGULARIZACION", "CLIENTE"}
+
+# Saludos que, si aparecen después de >24h de inactividad, disparan reset de contexto
+FRESH_GREETING_PATTERN = re.compile(
+    r"^\s*(hola|holi|hi|hey|buen[oa]s?(\s+(d[ií]as|tardes|noches))?|qu[eé]\s+tal|saludos)\s*[!¡.,]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_fresh_greeting_after_gap(history: list[dict], user_text: str, hours: int = 24) -> bool:
+    if not FRESH_GREETING_PATTERN.match(user_text.strip()):
+        return False
+    last_assistant_ts = None
+    for h in reversed(history):
+        if h.get("role") == "assistant":
+            last_assistant_ts = h.get("created_at")
+            break
+    if not last_assistant_ts:
+        return False
+    try:
+        from datetime import datetime, timezone, timedelta
+        if isinstance(last_assistant_ts, str):
+            ts = datetime.fromisoformat(last_assistant_ts.replace("Z", "+00:00"))
+        else:
+            ts = last_assistant_ts
+        return datetime.now(timezone.utc) - ts > timedelta(hours=hours)
+    except Exception:
+        return False
+
+
+def whatsapp_format(text: str) -> str:
+    """Convierte Markdown bold (**x**) a WhatsApp bold (*x*)."""
+    return BOLD_MARKDOWN_PATTERN.sub(r"*\1*", text)
+
+
+def strip_asterisks_for_ig(text: str) -> str:
+    """Para Instagram/Messenger, quita asteriscos de negritas (se verían literalmente)."""
+    text = BOLD_MARKDOWN_PATTERN.sub(r"\1", text)
+    text = WHATSAPP_BOLD_PATTERN.sub(r"\1", text)
+    return text
+
+
+def extract_phone_save(reply_text: str) -> tuple[str, str | None]:
+    match = PHONE_SAVE_PATTERN.search(reply_text)
+    if not match:
+        return reply_text, None
+    clean = PHONE_SAVE_PATTERN.sub("", reply_text).strip()
+    raw_phone = match.group(1).strip()
+    normalized = "+" + "".join(c for c in raw_phone if c.isdigit()) if "+" in raw_phone \
+                 else "".join(c for c in raw_phone if c.isdigit())
+    return clean, normalized
+
+
+def extract_block_action(reply_text: str) -> tuple[str, str | None]:
+    match = BLOCK_ACTION_PATTERN.search(reply_text)
+    action = match.group(1) if match else None
+    clean_text = BLOCK_ACTION_PATTERN.sub("", reply_text).strip()
+    return clean_text, action
+
+
+def extract_escalation(reply_text: str) -> tuple[str, str | None]:
+    match = ESCALATE_PATTERN.search(reply_text)
+    category = match.group(1) if match else None
+    clean_text = ESCALATE_PATTERN.sub("", reply_text).strip()
+    return clean_text, category
+
+
+def handle_escalation(customer: dict, category: str, payload: ManychatWebhookPayload) -> None:
+    """Aplica los tags correspondientes en ManyChat, registra la escalation
+    en Supabase y, si aplica, notifica al equipo del despacho.
+    """
+    try:
+        tags = ESCALATION_TAGS.get(category, [])
+        for tag in tags:
+            try:
+                apply_tag(payload.user_id, tag)
+            except Exception as e:
+                logger.warning(f"No se pudo aplicar tag {tag!r} en ManyChat: {e}")
+
+        try:
+            create_escalation(customer["id"], reason=category.lower())
+        except Exception as e:
+            logger.warning(f"No se pudo registrar escalation en Supabase: {e}")
+
+        try:
+            update_customer_stage(customer["id"], f"escalated_{category.lower()}")
+        except Exception as e:
+            logger.warning(f"No se pudo actualizar stage: {e}")
+
+        if category in ESCALATION_NOTIFY:
+            admin_msg = (
+                f"📋 Nuevo prospecto Despacho ({category})\n\n"
+                f"👤 {customer.get('first_name') or 'Sin nombre'}\n"
+                f"📞 {customer.get('phone') or 'Sin teléfono'}\n"
+                f"🆔 ManyChat user: {payload.user_id}\n"
+                f"🏷 Tags aplicados: {', '.join(tags)}"
+            )
+            try:
+                notify_admin(admin_msg)
+            except Exception as e:
+                logger.warning(f"No se pudo notificar al admin: {e}")
+    except Exception as e:
+        logger.exception(f"Error en handle_escalation: {e}")
+
+
+@app.get("/")
+def root():
+    return {"service": "despacho-bot", "status": "ok"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_id: str | None) -> None:
+    """Se ejecuta sincrónicamente dentro del request del webhook con un debounce corto
+    para agregar mensajes fragmentados, hacer idempotency checks y llamar a Claude.
+    """
+    try:
+        time.sleep(DEBOUNCE_SECONDS)
+
+        latest_id = get_latest_user_message_id(customer["id"])
+        if latest_id and my_msg_id and latest_id != my_msg_id:
+            logger.info(
+                f"Debounce: skip {customer['id']} — mensaje más reciente ({latest_id}) procesará"
+            )
+            return
+
+        if my_msg_id and has_assistant_reply_after(customer["id"], my_msg_id):
+            logger.info(
+                f"Idempotency: skip {customer['id']} — ya existe respuesta después de {my_msg_id}"
+            )
+            return
+
+        pending = get_user_messages_since_last_assistant(customer["id"])
+        if not pending:
+            logger.warning(f"No pending messages for {customer['id']} — caso raro")
+            return
+
+        combined_text = "\n".join(m["content"] for m in pending)
+        history = get_conversation_history(customer["id"], limit=40)
+        history_clean = [
+            h for h in history
+            if h["role"] == "assistant" or h["content"] not in [m["content"] for m in pending]
+        ]
+
+        if is_fresh_greeting_after_gap(history_clean, combined_text, hours=24):
+            logger.info(f"Fresh greeting after >24h gap for {customer['id']} — resetting history")
+            history_clean = []
+
+        channel = payload.channel or "whatsapp"
+        reply_raw = generate_reply(
+            history_clean, combined_text,
+            user_name=customer.get("first_name"),
+            channel=channel,
+            phone=customer.get("phone"),
+        )
+        reply_clean, block_action = extract_block_action(reply_raw)
+        reply_clean, escalation_category = extract_escalation(reply_clean)
+        reply_clean, phone_collected = extract_phone_save(reply_clean)
+
+        if channel == "whatsapp":
+            reply_clean = whatsapp_format(reply_clean)
+        else:
+            reply_clean = strip_asterisks_for_ig(reply_clean)
+
+        if my_msg_id and has_assistant_reply_after(customer["id"], my_msg_id):
+            logger.info(
+                f"Late idempotency: skip {customer['id']} — respuesta concurrente detectada"
+            )
+            return
+
+        save_message(customer["id"], "assistant", reply_clean)
+
+        if phone_collected:
+            logger.info(f"Teléfono capturado para {customer['id']}: {phone_collected}")
+            update_customer_phone(customer["id"], phone_collected)
+            customer["phone"] = phone_collected
+
+        if block_action == "BLOCK_RUDE":
+            logger.info(f"Blocking {customer['id']} por grosería/spam (7 días)")
+            block_customer(customer["id"], reason="rude", days=7)
+        elif block_action == "BLOCK_CRISIS":
+            logger.info(f"Blocking {customer['id']} por crisis (7 días)")
+            block_customer(customer["id"], reason="crisis", days=7)
+
+        if escalation_category:
+            logger.info(f"Escalation {escalation_category} para {customer['id']}")
+            handle_escalation(customer, escalation_category, payload)
+            if escalation_category in {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO"}:
+                set_conversation_ended(payload.user_id, True)
+
+        set_bot_reply(subscriber_id=payload.user_id, text=reply_clean)
+        logger.info(f"Respondido a {customer['id']}: {len(pending)} msg(s) agregados")
+    except Exception as e:
+        logger.exception(f"Error procesando mensaje en background: {e}")
+        try:
+            set_bot_reply(
+                subscriber_id=payload.user_id,
+                text="Hola, en un momento un ejecutivo del despacho te contacta. Gracias por tu paciencia 🙏",
+            )
+        except Exception:
+            pass
+
+
+@app.post("/api/webhook/manychat")
+def manychat_webhook(
+    payload: ManychatWebhookPayload,
+    x_webhook_secret: str | None = Header(default=None),
+):
+    """Webhook de ManyChat. Procesa el mensaje sincrónicamente con un debounce
+    corto y deja el ai_response listo como custom field para que ManyChat lo
+    muestre al usuario.
+
+    Timeout de External Request en ManyChat: 10s hard-coded. Con DEBOUNCE_SECONDS=3
+    y Claude (~3-5s) terminamos en ~8s.
+    """
+    if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    logger.info(f"Mensaje de {payload.user_id}: {payload.text[:80]}")
+
+    try:
+        customer = get_or_create_customer(
+            user_id=payload.user_id,
+            phone=payload.phone,
+            first_name=payload.first_name,
+        )
+
+        if is_blocked(customer):
+            logger.info(
+                f"Customer {customer['id']} está bloqueado ({customer.get('block_reason')}) — ignorando mensaje"
+            )
+            save_message(customer["id"], "user", payload.text)
+            return {"status": "blocked"}
+
+        saved = save_message(customer["id"], "user", payload.text)
+        my_msg_id = saved[0]["id"] if saved else None
+
+        _process_user_turn(customer, payload, my_msg_id)
+        return {"status": "ok", "msg_id": my_msg_id}
+
+    except Exception as e:
+        logger.exception(f"Error procesando mensaje: {e}")
+        try:
+            set_bot_reply(
+                subscriber_id=payload.user_id,
+                text="Hola, en un momento un ejecutivo del despacho te contacta. Gracias por tu paciencia 🙏",
+            )
+        except Exception:
+            pass
+        return {"status": "error"}
