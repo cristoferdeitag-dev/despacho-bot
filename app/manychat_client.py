@@ -78,7 +78,9 @@ def set_conversation_ended(subscriber_id: str, ended: bool = True) -> bool:
     payload = {
         "subscriber_id": subscriber_id,
         "field_id": int(settings.MANYCHAT_CONVERSATION_ENDED_FIELD_ID),
-        "field_value": bool(ended),
+        # field is Text in this workspace (created via UI as Text by default).
+        # Send "true"/"false" string so the flow's Condition can compare on it.
+        "field_value": "true" if ended else "false",
     }
     try:
         with httpx.Client(timeout=10.0) as client:
