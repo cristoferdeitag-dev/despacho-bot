@@ -161,6 +161,56 @@ def health():
     return {"status": "healthy"}
 
 
+@app.post("/api/test/chat")
+def test_chat(payload: ManychatWebhookPayload, x_webhook_secret: str | None = Header(default=None)):
+    """Endpoint de prueba — corre la misma lógica del bot pero NO envía la
+    respuesta por ManyChat. La devuelve directo en el JSON. Útil para iterar
+    el prompt sin tocar el flow real.
+    """
+    if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    customer = get_or_create_customer(
+        user_id=payload.user_id,
+        phone=payload.phone,
+        first_name=payload.first_name,
+    )
+
+    if is_blocked(customer):
+        return {"status": "blocked", "reason": customer.get("block_reason")}
+
+    save_message(customer["id"], "user", payload.text)
+
+    history = get_conversation_history(customer["id"], limit=40)
+    history_clean = [h for h in history if h["content"] != payload.text or h["role"] != "user"]
+
+    channel = payload.channel or "whatsapp"
+    reply_raw = generate_reply(
+        history_clean, payload.text,
+        user_name=customer.get("first_name"),
+        channel=channel,
+        phone=customer.get("phone"),
+    )
+    reply_clean, block_action = extract_block_action(reply_raw)
+    reply_clean, escalation_category = extract_escalation(reply_clean)
+    reply_clean, phone_collected = extract_phone_save(reply_clean)
+
+    if channel == "whatsapp":
+        reply_clean = whatsapp_format(reply_clean)
+    else:
+        reply_clean = strip_asterisks_for_ig(reply_clean)
+
+    save_message(customer["id"], "assistant", reply_clean)
+
+    return {
+        "reply": reply_clean,
+        "block_action": block_action,
+        "escalation": escalation_category,
+        "phone_collected": phone_collected,
+        "customer_id": customer["id"],
+    }
+
+
 def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_id: str | None) -> None:
     """Se ejecuta sincrónicamente dentro del request del webhook con un debounce corto
     para agregar mensajes fragmentados, hacer idempotency checks y llamar a Claude.
