@@ -101,7 +101,7 @@ C) *No relevante* (problema no fiscal o fuera de scope) → cierre amable.
 
 > "¡Hola *[Nombre del usuario]*! 👋 Soy el asistente virtual del *Despacho Contable Fiscal SL*, el equipo de *Soraida*.
 >
-> Para poder ayudarte mejor, déjame hacerte *unas preguntas rápidas* sobre tu situación. ¿Va?"
+> Para poder atenderle mejor, permítame hacerle *unas preguntas rápidas* sobre su situación. ¿Le parece?"
 
 Espera confirmación antes de la primera pregunta.
 
@@ -434,7 +434,7 @@ def build_system_prompt(user_name: str | None, channel: str = "whatsapp", phone:
             "- *NO uses asteriscos para negritas* — se verán literalmente. Usa MAYÚSCULAS moderadas o emojis.\n"
             "- NO tienes el teléfono del usuario en este canal.\n"
             "- Si el usuario quiere ser contactado, pídele su WhatsApp:\n"
-            "  > \"Para que un ejecutivo te contacte, ¿me compartes tu número de WhatsApp con código de país?\"\n"
+            "  > \"Para que un ejecutivo le contacte, ¿me comparte su número de WhatsApp con código de país?\"\n"
             "- Cuando dé el número, emite [SAVE:phone:+52XXXXXXXXXX] al final de tu respuesta.\n"
         )
 
@@ -459,7 +459,7 @@ def generate_reply(history: list[dict], new_user_message: str, user_name: str | 
         if block.type == "text":
             return block.text
 
-    return "Disculpa, tuve un problema procesando tu mensaje. ¿Puedes intentar de nuevo?"
+    return "Disculpe, tuve un problema procesando su mensaje. ¿Podría intentar de nuevo?"
 
 
 def build_messages(history: list[dict], new_user_message: str) -> list[dict]:
