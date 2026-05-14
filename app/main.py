@@ -266,9 +266,21 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
         if escalation_category:
             logger.info(f"Escalation {escalation_category} para {customer['id']}")
             handle_escalation(customer, escalation_category, payload)
-            if escalation_category in {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO"}:
-                set_conversation_ended(payload.user_id, True)
+            # Don't set conversation_ended=true here — that would block the
+            # Send Message Condition in ManyChat for THIS turn, meaning the
+            # user never sees the "Le aviso al equipo" confirmation. The
+            # customer's stage is now escalated_*; the NEXT message will hit
+            # the silent-handoff branch in the webhook entry, which sets
+            # conversation_ended=true at that point. The handoff message
+            # itself still reaches the user.
 
+        # Make sure conversation_ended is false for this turn so the Send
+        # Message Condition in ManyChat lets our reply through. Costs one
+        # extra ManyChat API call per turn but it's cheap and idempotent.
+        try:
+            set_conversation_ended(subscriber_id=payload.user_id, ended=False)
+        except Exception as e:
+            logger.warning(f"No se pudo limpiar conversation_ended en turn normal: {e}")
         set_bot_reply(subscriber_id=payload.user_id, text=reply_clean)
         logger.info(f"Respondido a {customer['id']}: {len(pending)} msg(s) agregados")
     except Exception as e:
@@ -309,6 +321,14 @@ def manychat_webhook(
         if payload.text.strip() == RESET_KEYWORD:
             deleted = reset_customer_conversation(customer["id"])
             reply = "🔄 Conversación reiniciada. Empezamos de cero — escríbeme un mensaje."
+            try:
+                # Clear conversation_ended FIRST so the ManyChat Condition lets
+                # the Send Message run for this Reset confirmation. The
+                # silent-handoff path leaves the field at true; without this
+                # unset, the user stays in silent mode forever even after Reset.
+                set_conversation_ended(subscriber_id=payload.user_id, ended=False)
+            except Exception as e:
+                logger.warning(f"No se pudo limpiar conversation_ended en Reset: {e}")
             set_bot_reply(subscriber_id=payload.user_id, text=reply)
             logger.info(f"Reset manual de {customer['id']} — {deleted} mensajes borrados")
             return {"status": "reset", "deleted_messages": deleted}
