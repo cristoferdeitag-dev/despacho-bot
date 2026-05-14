@@ -320,6 +320,22 @@ def manychat_webhook(
             save_message(customer["id"], "user", payload.text)
             return {"status": "blocked"}
 
+        # Silencio total para customers ya tageados — humano toma desde aquí.
+        # El bot guarda el mensaje en historial (para que Soraida vea contexto),
+        # marca ai_response vacío + conversation_ended=true. La automatización
+        # de ManyChat debe tener el Condition de conversation_ended ANTES del
+        # "Send Message" para que no se envíe nada.
+        stage = (customer.get("stage") or "").strip()
+        if stage.startswith("escalated_"):
+            save_message(customer["id"], "user", payload.text)
+            try:
+                set_bot_reply(subscriber_id=payload.user_id, text="")
+                set_conversation_ended(subscriber_id=payload.user_id, ended=True)
+            except Exception as e:
+                logger.warning(f"No se pudo silenciar bot para {customer['id']}: {e}")
+            logger.info(f"Silent handoff para {customer['id']} (stage={stage})")
+            return {"status": "handed_off", "stage": stage}
+
         saved = save_message(customer["id"], "user", payload.text)
         my_msg_id = saved[0]["id"] if saved else None
 
