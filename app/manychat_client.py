@@ -19,6 +19,8 @@ MANYCHAT_API_BASE = "https://api.manychat.com"
 SET_CUSTOM_FIELD_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/setCustomField"
 SEND_FLOW_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/sending/sendContent"
 ADD_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/addTagByName"
+REMOVE_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/removeTagByName"
+GET_INFO_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/getInfo"
 
 
 def _auth_headers() -> dict:
@@ -114,6 +116,47 @@ def apply_tag(subscriber_id: str, tag_name: str) -> bool:
     except Exception as e:
         logger.exception(f"Error inesperado aplicando tag {tag_name!r}: {e}")
         return False
+
+
+def remove_tag(subscriber_id: str, tag_name: str) -> bool:
+    """Quita un tag del suscriptor por nombre."""
+    if not settings.MANYCHAT_API_TOKEN:
+        logger.error("MANYCHAT_API_TOKEN no configurado — no puedo quitar tag")
+        return False
+
+    payload = {"subscriber_id": subscriber_id, "tag_name": tag_name}
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(REMOVE_TAG_BY_NAME_ENDPOINT, json=payload, headers=_auth_headers())
+        if response.status_code == 200 and response.json().get("status") == "success":
+            logger.info(f"Tag {tag_name!r} quitado de {subscriber_id}")
+            return True
+        logger.error(f"Error quitando tag {tag_name!r}: {response.status_code} — {response.text[:300]}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error inesperado quitando tag {tag_name!r}: {e}")
+        return False
+
+
+def get_subscriber_tags(subscriber_id: str) -> list[str]:
+    """Regresa los nombres de tags actualmente aplicados al suscriptor."""
+    if not settings.MANYCHAT_API_TOKEN:
+        return []
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                GET_INFO_ENDPOINT,
+                params={"subscriber_id": subscriber_id},
+                headers=_auth_headers(),
+            )
+        if response.status_code == 200 and response.json().get("status") == "success":
+            data = response.json().get("data") or {}
+            return [t.get("name", "") for t in (data.get("tags") or []) if t.get("name")]
+        logger.error(f"Error consultando tags de {subscriber_id}: {response.status_code}")
+        return []
+    except Exception as e:
+        logger.exception(f"Error inesperado consultando tags: {e}")
+        return []
 
 
 def notify_admin(text: str) -> bool:

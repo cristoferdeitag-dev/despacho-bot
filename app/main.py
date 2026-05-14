@@ -19,7 +19,14 @@ from app.supabase_client import (
     reset_customer_conversation,
 )
 from app.claude_client import generate_reply
-from app.manychat_client import set_bot_reply, notify_admin, set_conversation_ended, apply_tag
+from app.manychat_client import (
+    set_bot_reply,
+    notify_admin,
+    set_conversation_ended,
+    apply_tag,
+    remove_tag,
+    get_subscriber_tags,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("despacho-bot")
@@ -320,6 +327,24 @@ def manychat_webhook(
 
         if payload.text.strip() == RESET_KEYWORD:
             deleted = reset_customer_conversation(customer["id"])
+            # Quita todos los tags del bot en ManyChat también — si no, el
+            # cliente queda como "Interesado" en la lista de Soraida aunque
+            # internamente sea lead_new.
+            BOT_MANAGED_TAGS = [
+                "Interesado",
+                "ANÁLISIS FISCAL PENDIENTE",
+                "REGULARIZACIÓN",
+                "Seguimiento",
+                "No Interesado",
+                "CLIENTE",
+                "IMPORTANTE",
+            ]
+            current_tags = get_subscriber_tags(payload.user_id)
+            removed_tags = []
+            for tag in BOT_MANAGED_TAGS:
+                if tag in current_tags:
+                    if remove_tag(payload.user_id, tag):
+                        removed_tags.append(tag)
             reply = "🔄 Conversación reiniciada. Empezamos de cero — escríbeme un mensaje."
             try:
                 # Clear conversation_ended FIRST so the ManyChat Condition lets
@@ -330,8 +355,11 @@ def manychat_webhook(
             except Exception as e:
                 logger.warning(f"No se pudo limpiar conversation_ended en Reset: {e}")
             set_bot_reply(subscriber_id=payload.user_id, text=reply)
-            logger.info(f"Reset manual de {customer['id']} — {deleted} mensajes borrados")
-            return {"status": "reset", "deleted_messages": deleted}
+            logger.info(
+                f"Reset manual de {customer['id']} — {deleted} mensajes borrados, "
+                f"tags quitados: {removed_tags or 'ninguno'}"
+            )
+            return {"status": "reset", "deleted_messages": deleted, "removed_tags": removed_tags}
 
         if is_blocked(customer):
             logger.info(
