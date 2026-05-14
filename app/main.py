@@ -27,10 +27,9 @@ logger = logging.getLogger("despacho-bot")
 app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
 
 # Segundos a esperar antes de procesar, para agregar mensajes fragmentados.
-# El timeout duro de External Request en ManyChat es 10s. Con 8s + Claude
-# (~1-2s con Haiku) terminamos en ~9-10s — ajustado. Si vemos timeouts
-# constantes hay que bajar a 6s o migrar a procesamiento async.
-DEBOUNCE_SECONDS = 8.0
+# El timeout duro de External Request en ManyChat es 10s. Con 6s + Claude
+# Haiku (~1-2s) terminamos en ~7-8s — margen sano.
+DEBOUNCE_SECONDS = 6.0
 
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
