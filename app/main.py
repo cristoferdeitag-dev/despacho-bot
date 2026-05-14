@@ -12,6 +12,7 @@ from app.supabase_client import (
     is_blocked,
     get_user_messages_since_last_assistant,
     get_latest_user_message_id,
+    get_previous_user_message,
     has_assistant_reply_after,
     update_customer_phone,
     update_customer_stage,
@@ -34,9 +35,9 @@ logger = logging.getLogger("despacho-bot")
 app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
 
 # Segundos a esperar antes de procesar, para agregar mensajes fragmentados.
-# El timeout duro de External Request en ManyChat es 10s. Con 6s + Claude
-# Haiku (~1-2s) terminamos en ~7-8s — margen sano.
-DEBOUNCE_SECONDS = 6.0
+# 4s con Haiku (~1-2s) total ~5-6s — la latencia más baja que Claude no
+# se sienta lento. Reduce las veces que el cliente reenvía por impaciencia.
+DEBOUNCE_SECONDS = 4.0
 
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
@@ -386,6 +387,32 @@ def manychat_webhook(
 
         saved = save_message(customer["id"], "user", payload.text)
         my_msg_id = saved[0]["id"] if saved else None
+
+        # Dedup: si el user mandó exactamente la misma texto en los últimos 30s
+        # (caso típico: reenvió por impaciencia), no reproceses — el bot ya
+        # respondió la primera vez. Setea conversation_ended=true para que el
+        # Condition de ManyChat corte el Send Message; el próximo mensaje
+        # nuevo del user volverá a abrir el flujo normal.
+        prev = get_previous_user_message(customer["id"], exclude_id=my_msg_id)
+        if prev and prev.get("content", "").strip() == payload.text.strip():
+            try:
+                from datetime import datetime, timezone, timedelta
+                prev_ts = datetime.fromisoformat(
+                    prev["created_at"].replace("Z", "+00:00")
+                )
+                age = datetime.now(timezone.utc) - prev_ts
+                if age < timedelta(seconds=30):
+                    logger.info(
+                        f"Dedup: skip — user reenvió mismo texto en {age.total_seconds():.1f}s"
+                    )
+                    try:
+                        set_bot_reply(subscriber_id=payload.user_id, text="")
+                        set_conversation_ended(subscriber_id=payload.user_id, ended=True)
+                    except Exception as e:
+                        logger.warning(f"No se pudo silenciar dedup: {e}")
+                    return {"status": "dedup", "msg_id": my_msg_id}
+            except Exception as e:
+                logger.warning(f"Error en check de dedup: {e}")
 
         _process_user_turn(customer, payload, my_msg_id)
         return {"status": "ok", "msg_id": my_msg_id}

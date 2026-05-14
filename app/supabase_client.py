@@ -141,6 +141,26 @@ def create_escalation(customer_id: str, reason: str) -> dict:
     return result.data[0] if result.data else {}
 
 
+def get_previous_user_message(customer_id: str, exclude_id: str | None = None) -> dict | None:
+    """Regresa el mensaje user inmediatamente anterior a `exclude_id` (o el
+    último de todos si no se da). Útil para detectar duplicados literales
+    cuando el cliente reenvía el mismo texto por impaciencia."""
+    sb = get_supabase()
+    q = (
+        sb.table("messages")
+        .select("id, content, created_at")
+        .eq("customer_id", customer_id)
+        .eq("role", "user")
+        .order("created_at", desc=True)
+        .limit(2 if exclude_id else 1)
+    )
+    res = q.execute()
+    rows = res.data or []
+    if exclude_id:
+        rows = [r for r in rows if r["id"] != exclude_id]
+    return rows[0] if rows else None
+
+
 def get_latest_user_message_id(customer_id: str) -> str | None:
     sb = get_supabase()
     res = (
