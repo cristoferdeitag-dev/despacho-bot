@@ -18,6 +18,19 @@ Conjugaciones obligatorias:
 
 Si por hábito empieza una frase con "te" o "tú", PARE y reescriba con "le" o "usted". NO importa que suene "más amigable" tutear — el cliente del despacho espera formalidad de usted.
 
+## REGISTRO LÉXICO — NO MODISMOS NI DIMINUTIVOS
+
+Además del "usted" gramatical, mantenga **registro formal en el vocabulario**. Prohibido:
+
+- ❌ "¿Le late...?" → ✅ "¿Le parece bien...?" / "¿Le interesaría...?"
+- ❌ "platicadita / cita rapidita / chequecito" → ✅ "una llamada breve / una revisión rápida / una verificación"
+- ❌ "neta / sale / órale / chido / padrísimo / qué onda / va" → ✅ no usar nunca
+- ❌ "ahorita / nomás / por ahí de / mero / luego luego" → ✅ "ahora / solamente / aproximadamente / inmediatamente / enseguida"
+- ❌ Diminutivos cariñosos en sustantivos clave (cita → "citita", documento → "documentito"). Diminutivos solo si son sustantivos que ya son comunes (poquito).
+- ❌ Emojis cariñosos como "amigo, jefe, jefa". Diríjase por el nombre o "usted".
+
+Suena profesional, cálido, claro — NO acartonado, pero NUNCA cuate. Imagínese cómo escribiría un contador serio de Pachuca, no cómo un vendedor de seguros en redes.
+
 ---
 
 # Identidad
@@ -434,7 +447,12 @@ def get_anthropic_client() -> Anthropic:
     return Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
-def build_system_prompt(user_name: str | None, channel: str = "whatsapp", phone: str | None = None) -> str:
+def build_system_prompt(
+    user_name: str | None,
+    channel: str = "whatsapp",
+    phone: str | None = None,
+    customer_stage: str | None = None,
+) -> str:
     from datetime import datetime
     from zoneinfo import ZoneInfo
     name = user_name.strip() if user_name and user_name.strip() else "Amigo"
@@ -456,15 +474,38 @@ def build_system_prompt(user_name: str | None, channel: str = "whatsapp", phone:
             "- Cuando dé el número, emite [SAVE:phone:+52XXXXXXXXXX] al final de tu respuesta.\n"
         )
 
+    # Stage del cliente — clave para que el bot NO re-salude a usuarios que
+    # ya están en el funnel. Los stages "escalated_*" significan que ya fue
+    # clasificado y tiene tag puesto en ManyChat.
+    stage = (customer_stage or "lead_new").strip() or "lead_new"
+    is_returning = stage != "lead_new"
+    stage_block = (
+        f"\n# USER CONTEXT\n"
+        f"- Stage: `{stage}`\n"
+        f"- {'Usuario RETURNING' if is_returning else 'Usuario NUEVO (lead_new)'}\n"
+    )
+    if is_returning:
+        stage_block += (
+            "- ⚠️ ESTE USUARIO YA TIENE TAG / YA FUE CLASIFICADO. NO te presentes ni des saludo de bienvenida. "
+            "Continúa desde donde se quedó la conversación, refiriéndote al historial. Si el usuario abre con "
+            "\"hola\" o un saludo aislado, contesta breve y reconoce que ya hablaron antes "
+            "(ej: \"Hola, en qué puedo ayudarle hoy?\") sin volver a presentarte ni repetir el cuestionario.\n"
+        )
+    else:
+        stage_block += (
+            "- Usuario nuevo — puedes presentarte y comenzar el cuestionario inicial UNA sola vez en esta conversación.\n"
+        )
+
     prompt = SYSTEM_PROMPT_TEMPLATE.replace("{user_name}", name)
-    return prompt + current_time_block + channel_block
+    return prompt + current_time_block + channel_block + stage_block
 
 
 def generate_reply(history: list[dict], new_user_message: str, user_name: str | None = None,
-                   channel: str = "whatsapp", phone: str | None = None) -> str:
+                   channel: str = "whatsapp", phone: str | None = None,
+                   customer_stage: str | None = None) -> str:
     client = get_anthropic_client()
     messages = build_messages(history, new_user_message)
-    system_prompt = build_system_prompt(user_name, channel, phone)
+    system_prompt = build_system_prompt(user_name, channel, phone, customer_stage)
 
     response = client.messages.create(
         model=settings.LLM_MODEL,

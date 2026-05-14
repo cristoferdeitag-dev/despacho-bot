@@ -177,6 +177,17 @@ def has_assistant_reply_after(customer_id: str, user_msg_id: str) -> bool:
     return bool(res.data)
 
 
+def reset_customer_conversation(customer_id: str) -> int:
+    """Borra todo el historial de mensajes del customer y resetea su stage a
+    lead_new. Usado por el comando de pruebas `Reset` para empezar de cero
+    sin tener que crear un contacto nuevo en ManyChat.
+    """
+    sb = get_supabase()
+    deleted = sb.table("messages").delete().eq("customer_id", customer_id).execute()
+    sb.table("customers").update({"stage": "lead_new", "notes": None}).eq("id", customer_id).execute()
+    return len(deleted.data or [])
+
+
 def is_blocked(customer: dict) -> bool:
     """Revisa si el cliente está bloqueado (blocked_until futuro)."""
     from datetime import datetime, timezone

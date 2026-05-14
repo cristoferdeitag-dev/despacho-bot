@@ -16,6 +16,7 @@ from app.supabase_client import (
     update_customer_phone,
     update_customer_stage,
     create_escalation,
+    reset_customer_conversation,
 )
 from app.claude_client import generate_reply
 from app.manychat_client import set_bot_reply, notify_admin, set_conversation_ended, apply_tag
@@ -26,9 +27,10 @@ logger = logging.getLogger("despacho-bot")
 app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
 
 # Segundos a esperar antes de procesar, para agregar mensajes fragmentados.
-# Tiene que caber dentro del timeout de 10s del External Request de ManyChat.
-# Con 3s + Claude (~3-5s) terminamos en ~8s, suficiente margen.
-DEBOUNCE_SECONDS = 3.0
+# El timeout duro de External Request en ManyChat es 10s. Con 8s + Claude
+# (~1-2s con Haiku) terminamos en ~9-10s — ajustado. Si vemos timeouts
+# constantes hay que bajar a 6s o migrar a procesamiento async.
+DEBOUNCE_SECONDS = 8.0
 
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
@@ -48,32 +50,9 @@ ESCALATION_TAGS = {
 # Categorías que disparan notificación al equipo del despacho (vía notify_admin)
 ESCALATION_NOTIFY = {"INTERESADO", "REGULARIZACION", "CLIENTE"}
 
-# Saludos que, si aparecen después de >24h de inactividad, disparan reset de contexto
-FRESH_GREETING_PATTERN = re.compile(
-    r"^\s*(hola|holi|hi|hey|buen[oa]s?(\s+(d[ií]as|tardes|noches))?|qu[eé]\s+tal|saludos)\s*[!¡.,]*\s*$",
-    re.IGNORECASE,
-)
-
-
-def is_fresh_greeting_after_gap(history: list[dict], user_text: str, hours: int = 24) -> bool:
-    if not FRESH_GREETING_PATTERN.match(user_text.strip()):
-        return False
-    last_assistant_ts = None
-    for h in reversed(history):
-        if h.get("role") == "assistant":
-            last_assistant_ts = h.get("created_at")
-            break
-    if not last_assistant_ts:
-        return False
-    try:
-        from datetime import datetime, timezone, timedelta
-        if isinstance(last_assistant_ts, str):
-            ts = datetime.fromisoformat(last_assistant_ts.replace("Z", "+00:00"))
-        else:
-            ts = last_assistant_ts
-        return datetime.now(timezone.utc) - ts > timedelta(hours=hours)
-    except Exception:
-        return False
+# Keyword exacto que un usuario puede mandar para resetear su conversación
+# entera en pruebas. No usar palabras que un cliente real podría escribir.
+RESET_KEYWORD = "Reset"
 
 
 def whatsapp_format(text: str) -> str:
@@ -176,6 +155,10 @@ def test_chat(payload: ManychatWebhookPayload, x_webhook_secret: str | None = He
         first_name=payload.first_name,
     )
 
+    if payload.text.strip() == RESET_KEYWORD:
+        deleted = reset_customer_conversation(customer["id"])
+        return {"status": "reset", "deleted_messages": deleted, "customer_id": customer["id"]}
+
     if is_blocked(customer):
         return {"status": "blocked", "reason": customer.get("block_reason")}
 
@@ -190,6 +173,7 @@ def test_chat(payload: ManychatWebhookPayload, x_webhook_secret: str | None = He
         user_name=customer.get("first_name"),
         channel=channel,
         phone=customer.get("phone"),
+        customer_stage=customer.get("stage"),
     )
     reply_clean, block_action = extract_block_action(reply_raw)
     reply_clean, escalation_category = extract_escalation(reply_clean)
@@ -243,16 +227,13 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             if h["role"] == "assistant" or h["content"] not in [m["content"] for m in pending]
         ]
 
-        if is_fresh_greeting_after_gap(history_clean, combined_text, hours=24):
-            logger.info(f"Fresh greeting after >24h gap for {customer['id']} — resetting history")
-            history_clean = []
-
         channel = payload.channel or "whatsapp"
         reply_raw = generate_reply(
             history_clean, combined_text,
             user_name=customer.get("first_name"),
             channel=channel,
             phone=customer.get("phone"),
+            customer_stage=customer.get("stage"),
         )
         reply_clean, block_action = extract_block_action(reply_raw)
         reply_clean, escalation_category = extract_escalation(reply_clean)
@@ -325,6 +306,13 @@ def manychat_webhook(
             phone=payload.phone,
             first_name=payload.first_name,
         )
+
+        if payload.text.strip() == RESET_KEYWORD:
+            deleted = reset_customer_conversation(customer["id"])
+            reply = "🔄 Conversación reiniciada. Empezamos de cero — escríbeme un mensaje."
+            set_bot_reply(subscriber_id=payload.user_id, text=reply)
+            logger.info(f"Reset manual de {customer['id']} — {deleted} mensajes borrados")
+            return {"status": "reset", "deleted_messages": deleted}
 
         if is_blocked(customer):
             logger.info(

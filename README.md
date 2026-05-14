@@ -19,7 +19,7 @@ Prospecto (WhatsApp)
   ↓
 ManyChat (workspace Despacho)
   ↓ POST /api/webhook/manychat (header X-Webhook-Secret)
-FastAPI (Railway: despacho-bot.up.railway.app)
+FastAPI (Railway: despacho-bot-production.up.railway.app)
   ├─ Supabase (memoria + clasificación)
   └─ Claude Haiku 4.5 (genera respuesta + decide acción)
   ↓
@@ -41,7 +41,6 @@ LLM_MODEL=claude-haiku-4-5-20251001
 # IDs específicos del workspace de ManyChat (se llenan después de crear los custom fields)
 MANYCHAT_AI_RESPONSE_FIELD_ID=
 MANYCHAT_CONVERSATION_ENDED_FIELD_ID=
-MANYCHAT_ADMIN_SUBSCRIBER_ID=
 ```
 
 ## Arrancar local
@@ -63,9 +62,8 @@ Ejecutar `sql/001_initial_schema.sql` completo en el SQL Editor del proyecto del
 En el workspace del Despacho (ID `110240088419870`):
 
 1. **Crear custom fields:** `ai_response` (texto), `conversation_ended` (boolean). Anotar los IDs y guardarlos en las env vars.
-2. **Identificar admin:** Soraida como suscriptora del bot. Su `subscriber_id` va en `MANYCHAT_ADMIN_SUBSCRIBER_ID`.
-3. **Editar el flow principal del WhatsApp:**
-   - Acción "External Request" apuntando a `https://despacho-bot.up.railway.app/api/webhook/manychat`
+2. **Editar el flow principal del WhatsApp:**
+   - Acción "External Request" apuntando a `https://despacho-bot-production.up.railway.app/api/webhook/manychat`
    - Método: POST. Headers: `X-Webhook-Secret: <WEBHOOK_SECRET>`.
    - Body JSON:
      ```json
