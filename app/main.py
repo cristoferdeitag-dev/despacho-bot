@@ -19,7 +19,7 @@ from app.supabase_client import (
     create_escalation,
     reset_customer_conversation,
 )
-from app.claude_client import generate_reply
+from app.claude_client import generate_reply, classify_inquiry
 from app.manychat_client import (
     set_bot_reply,
     notify_admin,
@@ -233,6 +233,33 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             h for h in history
             if h["role"] == "assistant" or h["content"] not in [m["content"] for m in pending]
         ]
+
+        # Non-service triage — only for brand-new leads (no prior conversation).
+        # If the lead is asking for prácticas, ofreciendo servicios, buscando
+        # empleo, etc., we don't engage the LLM. Single fixed reply, tag, end
+        # conversation. Returning users (anyone with prior assistant replies)
+        # skip this — they already passed the gate or were classified before.
+        stage = (customer.get("stage") or "lead_new").strip() or "lead_new"
+        has_prior_assistant = any(h["role"] == "assistant" for h in history_clean)
+        if stage == "lead_new" and not has_prior_assistant:
+            category = classify_inquiry(combined_text)
+            if category != "service":
+                logger.info(f"Non-service inquiry para {customer['id']}: {category}")
+                fixed_reply = "En unos momentos se atenderá su petición."
+                save_message(customer["id"], "assistant", fixed_reply)
+                try:
+                    apply_tag(payload.user_id, category)
+                except Exception as e:
+                    logger.warning(f"No se pudo aplicar tag {category}: {e}")
+                # End the conversation: future messages from this lead won't
+                # reach Claude. ManyChat's Condition on conversation_ended
+                # blocks subsequent Send Message nodes.
+                try:
+                    set_conversation_ended(subscriber_id=payload.user_id, ended=True)
+                except Exception as e:
+                    logger.warning(f"No se pudo set conversation_ended en non-service: {e}")
+                set_bot_reply(subscriber_id=payload.user_id, text=fixed_reply)
+                return
 
         channel = payload.channel or "whatsapp"
         reply_raw = generate_reply(

@@ -560,6 +560,57 @@ def build_system_prompt(
     return prompt + current_time_block + channel_block + stage_block
 
 
+NON_SERVICE_CATEGORIES = {
+    "service",
+    "busca_practicas",
+    "proveedor_servicios",
+    "solicita_empleo",
+    "medios_prensa",
+    "otra_no_servicio",
+}
+
+CLASSIFY_INQUIRY_PROMPT = """Eres un clasificador. Tu única tarea es leer el mensaje del usuario y devolver UN SOLO código de categoría, sin texto adicional, sin explicaciones, sin puntuación.
+
+Categorías posibles:
+- service: el usuario busca servicios contables o fiscales del despacho (declaración anual, contabilidad mensual, RFC, e.firma, regularización, alta SAT, etc.)
+- busca_practicas: el usuario es estudiante o egresado pidiendo prácticas profesionales, servicio social, estancias, residencia profesional o similar
+- proveedor_servicios: el usuario ofrece productos o servicios al despacho (software, marketing, papelería, agencia, mantenimiento, capacitación, etc.)
+- solicita_empleo: el usuario busca trabajo o vacante en el despacho, manda CV, pregunta si contratan
+- medios_prensa: periodista, medio de comunicación, podcast, entrevista, colaboración de contenido
+- otra_no_servicio: cualquier otra cosa que NO sea solicitud de servicios contables (saludos no clasificables NO van aquí — saludos cuentan como service por defecto)
+
+Regla de oro: si el mensaje es ambiguo, un saludo, "hola", o no estás seguro, responde `service`. Solo clasifica como no-servicio cuando el mensaje sea CLARAMENTE no-servicio.
+
+Devuelve únicamente uno de: service, busca_practicas, proveedor_servicios, solicita_empleo, medios_prensa, otra_no_servicio.
+"""
+
+
+def classify_inquiry(message: str) -> str:
+    """Clasifica el primer mensaje del lead en service vs no-servicio.
+    Usa el modelo barato (Haiku) porque solo necesitamos un token.
+    Cualquier fallo o respuesta no-reconocida cae a 'service' (lado seguro:
+    nunca dejamos un cliente potencial sin atender por error del clasificador).
+    """
+    if not message or not message.strip():
+        return "service"
+    try:
+        client = get_anthropic_client()
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            system=CLASSIFY_INQUIRY_PROMPT,
+            messages=[{"role": "user", "content": message[:1000]}],
+        )
+        for block in response.content:
+            if block.type == "text":
+                cat = block.text.strip().lower().replace(".", "").replace("`", "")
+                if cat in NON_SERVICE_CATEGORIES:
+                    return cat
+        return "service"
+    except Exception:
+        return "service"
+
+
 def generate_reply(history: list[dict], new_user_message: str, user_name: str | None = None,
                    channel: str = "whatsapp", phone: str | None = None,
                    customer_stage: str | None = None) -> str:
