@@ -30,42 +30,74 @@ def _auth_headers() -> dict:
     }
 
 
-def set_bot_reply(subscriber_id: str, text: str) -> bool:
-    """Guarda la respuesta del bot en el custom field `ai_response` de ManyChat.
+def send_direct_message(subscriber_id: str, text: str) -> bool:
+    """Envía el texto DIRECTAMENTE al subscriber vía ManyChat sendContent.
 
-    El flow de ManyChat lee {{ai_response}} en el siguiente Send Message dentro del
-    mismo trigger del usuario, evitando el 24h messaging window de WhatsApp.
+    NO depende del bloque "Enviar mensaje" del flow visual. Esto evita el race
+    condition de los custom fields globales (cuando 2 flows del mismo user corren
+    en paralelo, ambos leen {{ai_response}} y mandan doble). Con el envío directo,
+    el bot entrega UNA sola vez por turno (controlado por su debounce/dedup).
+    Requiere que el user haya escrito en las últimas 24h (messaging window).
+    """
+    if not settings.MANYCHAT_API_TOKEN:
+        logger.error("MANYCHAT_API_TOKEN no configurado — no puedo enviar directo")
+        return False
+    payload = {
+        "subscriber_id": subscriber_id,
+        "data": {"version": "v2", "content": {"messages": [{"type": "text", "text": text}]}},
+    }
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(SEND_FLOW_ENDPOINT, json=payload, headers=_auth_headers())
+        if response.status_code == 200 and response.json().get("status") == "success":
+            logger.info(f"Mensaje directo enviado a {subscriber_id}")
+            return True
+        logger.error(f"Error en send_direct_message: {response.status_code} — {response.text[:300]}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error inesperado en send_direct_message: {e}")
+        return False
+
+
+def set_bot_reply(subscriber_id: str, text: str) -> bool:
+    """Entrega la respuesta del bot.
+
+    1) La escribe en el custom field `ai_response` (compat con cualquier flow que aún
+       lea {{ai_response}}).
+    2) Si hay texto real, la ENTREGA DIRECTO vía send_direct_message — así no dependemos
+       del bloque "Enviar mensaje" del flow (que mandaba duplicados por el race del
+       custom field global). Texto vacío = silencio/handoff → no se envía nada.
     """
     if not settings.MANYCHAT_API_TOKEN:
         logger.error("MANYCHAT_API_TOKEN no configurado — no puedo guardar respuesta")
         return False
-    if not settings.MANYCHAT_AI_RESPONSE_FIELD_ID:
-        logger.error("MANYCHAT_AI_RESPONSE_FIELD_ID no configurado — no puedo guardar respuesta")
-        return False
 
-    payload = {
-        "subscriber_id": subscriber_id,
-        "field_id": int(settings.MANYCHAT_AI_RESPONSE_FIELD_ID),
-        "field_value": text,
-    }
+    ok_field = False
+    if settings.MANYCHAT_AI_RESPONSE_FIELD_ID:
+        payload = {
+            "subscriber_id": subscriber_id,
+            "field_id": int(settings.MANYCHAT_AI_RESPONSE_FIELD_ID),
+            "field_value": text,
+        }
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(SET_CUSTOM_FIELD_ENDPOINT, json=payload, headers=_auth_headers())
+            if response.status_code == 200 and response.json().get("status") == "success":
+                logger.info(f"ai_response actualizado para {subscriber_id}")
+                ok_field = True
+            else:
+                logger.error(
+                    f"Error al guardar ai_response: HTTP {response.status_code} — {response.text[:300]}"
+                )
+        except httpx.TimeoutException:
+            logger.error(f"Timeout al actualizar ai_response para {subscriber_id}")
+        except Exception as e:
+            logger.exception(f"Error inesperado al actualizar custom field: {e}")
 
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(SET_CUSTOM_FIELD_ENDPOINT, json=payload, headers=_auth_headers())
-
-        if response.status_code == 200 and response.json().get("status") == "success":
-            logger.info(f"ai_response actualizado para {subscriber_id}")
-            return True
-        logger.error(
-            f"Error al guardar ai_response: HTTP {response.status_code} — {response.text[:300]}"
-        )
-        return False
-    except httpx.TimeoutException:
-        logger.error(f"Timeout al actualizar ai_response para {subscriber_id}")
-        return False
-    except Exception as e:
-        logger.exception(f"Error inesperado al actualizar custom field: {e}")
-        return False
+    # Entrega directa (la real). Solo texto no vacío; vacío = silencio/handoff.
+    if text and text.strip():
+        send_direct_message(subscriber_id, text)
+    return ok_field
 
 
 send_text_message = set_bot_reply  # alias retrocompat
