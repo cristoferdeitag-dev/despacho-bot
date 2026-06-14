@@ -33,6 +33,24 @@ Suena profesional, cálido, claro — NO acartonado, pero NUNCA cuate. Imagínes
 
 ---
 
+# ⚠️ REGLA #0.1: NUNCA INVENTE NI ASUMA DATOS QUE EL CLIENTE NO DIJO
+
+Use SOLO lo que el cliente escribió explícitamente. Está PROHIBIDO deducir o "entender" datos que no dio:
+- ❌ Si el cliente dice algo ambiguo ("ya está", "ahí está", "ya te dije"), NO asuma qué significa. Pregunte: "¿Se refiere a que ya tiene su RFC y e.firma? Para confirmar."
+- ❌ NUNCA escriba "entiendo que ya tiene RFC y e.firma" si no lo dijo claramente. Eso destruye la confianza.
+- ❌ NO invente el régimen, el servicio, ni la situación.
+- ✅ Si no está seguro de lo que quiso decir, pregunte de forma corta y concreta antes de avanzar.
+
+# ⚠️ REGLA #0.2: GUÍE AL CLIENTE — NO LO INTERROGUE
+
+Muchos clientes NO saben de impuestos y esperan que USTED los lleve. Si el cliente está perdido, vago o dice "no sé / esperaba que tú me dijeras":
+- NO siga lanzando preguntas abiertas una tras otra. Eso lo frustra.
+- TOME el control: con lo poco que sepa, PROPONGA el camino más probable. Ej: "Por lo que me cuenta (carpintero independiente), lo más común es la *declaración anual*. Le explico cómo funciona y qué necesitamos. ¿Le parece?"
+- Haga máximo 1 pregunta a la vez, y solo si es indispensable para avanzar. Si puede deducir el servicio probable de forma RAZONABLE (no inventando datos personales), propóngalo y confirme, en vez de preguntar de cero.
+- Sea el experto que tranquiliza y dirige, no un formulario.
+
+---
+
 # Identidad
 
 Es el *asistente virtual* del *Despacho Contable Fiscal SL*, un despacho con *40 años de experiencia* en materia fiscal, liderado por la contadora fiscalista *Soraida Nicole*. Su misión: atender prospectos por WhatsApp (con trato de USTED), entender su situación fiscal y clasificarlos correctamente.
@@ -538,6 +556,15 @@ Sea: *cálido, formal de "usted", memoria intacta, respetuoso, conciso, sin prom
 """
 
 
+# Parte ESTÁTICA del system prompt (idéntica en cada request) → se cachea con
+# prompt caching para que Haiku no reprocese ~40KB cada vez (baja latencia de
+# ~8s a ~2-3s). El nombre del cliente va aparte, en la parte dinámica, para no
+# romper el caché.
+STATIC_SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.replace(
+    "{user_name}", "(ver 'DATOS DEL CLIENTE' en el bloque dinámico)"
+)
+
+
 def get_anthropic_client() -> Anthropic:
     if not settings.ANTHROPIC_API_KEY:
         raise RuntimeError("Falta ANTHROPIC_API_KEY en el .env")
@@ -593,8 +620,9 @@ def build_system_prompt(
             "- Usuario nuevo — puedes presentarte y comenzar el cuestionario inicial UNA sola vez en esta conversación.\n"
         )
 
-    prompt = SYSTEM_PROMPT_TEMPLATE.replace("{user_name}", name)
-    return prompt + current_time_block + channel_block + stage_block
+    # Solo la parte DINÁMICA (el nombre va aquí para no romper el caché del prompt).
+    user_block = f"\n# DATOS DEL CLIENTE\n- Nombre del cliente: {name}\n"
+    return user_block + current_time_block + channel_block + stage_block
 
 
 NON_SERVICE_CATEGORIES = {
@@ -653,12 +681,19 @@ def generate_reply(history: list[dict], new_user_message: str, user_name: str | 
                    customer_stage: str | None = None) -> str:
     client = get_anthropic_client()
     messages = build_messages(history, new_user_message)
-    system_prompt = build_system_prompt(user_name, channel, phone, customer_stage)
+    dynamic_block = build_system_prompt(user_name, channel, phone, customer_stage)
 
     response = client.messages.create(
         model=settings.LLM_MODEL,
         max_tokens=1024,
-        system=system_prompt,
+        system=[
+            {
+                "type": "text",
+                "text": STATIC_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "text", "text": dynamic_block},
+        ],
         messages=messages,
     )
 
