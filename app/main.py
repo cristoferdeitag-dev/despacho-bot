@@ -1,7 +1,7 @@
 import logging
 import re
 import time
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from app.config import settings
 from app.models import ManychatWebhookPayload
 from app.supabase_client import (
@@ -379,14 +379,19 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
 @app.post("/api/webhook/manychat")
 def manychat_webhook(
     payload: ManychatWebhookPayload,
+    background_tasks: BackgroundTasks,
     x_webhook_secret: str | None = Header(default=None),
 ):
-    """Webhook de ManyChat. Procesa el mensaje sincrónicamente con un debounce
-    corto y deja el ai_response listo como custom field para que ManyChat lo
-    muestre al usuario.
+    """Webhook de ManyChat. Responde 200 al INSTANTE y procesa el mensaje en
+    segundo plano (Claude tarda ~8-12s).
 
-    Timeout de External Request en ManyChat: 10s hard-coded. Con DEBOUNCE_SECONDS=3
-    y Claude (~3-5s) terminamos en ~8s.
+    Antes procesábamos sincrónicamente, pero el External Request de ManyChat
+    tiene timeout de 10s: si el bot tardaba más, ManyChat seguía de largo y el
+    flujo de WhatsApp llegaba al "Enviar mensaje" SIN la respuesta lista → no
+    entregaba nada. Ahora la Solicitud externa retorna de inmediato y el flujo
+    debe tener una PAUSA después de ella (≈15s) para esperar a que el bot deje
+    listo {{ai_response}} + conversation_ended antes del "Enviar mensaje".
+    En Messenger no importa la pausa (ahí el bot entrega directo por send_direct).
     """
     if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
@@ -507,7 +512,9 @@ def manychat_webhook(
             except Exception as e:
                 logger.warning(f"Error en check de dedup: {e}")
 
-        _process_user_turn(customer, payload, my_msg_id)
+        # Procesa en segundo plano y responde 200 de inmediato (evita el timeout
+        # de 10s del External Request de ManyChat). El flujo espera con su Pausa.
+        background_tasks.add_task(_process_user_turn, customer, payload, my_msg_id)
         return {"status": "ok", "msg_id": my_msg_id}
 
     except Exception as e:
