@@ -76,6 +76,16 @@ ESCALATION_TAGS = {
 # Categorías que disparan notificación al equipo del despacho (vía notify_admin)
 ESCALATION_NOTIFY = {"INTERESADO", "REGULARIZACION", "CLIENTE"}
 
+# Stages donde un HUMANO toma la conversación → el bot se calla (silent handoff).
+# SEGUIMIENTO (necesita sacar e.firma/cita y volver) y NO_INTERESADO NO van aquí:
+# en esos casos el bot debe SEGUIR atendiendo si el cliente sigue escribiendo.
+HUMAN_HANDOFF_STAGES = {
+    "escalated_interesado",
+    "escalated_regularizacion",
+    "escalated_cliente",
+    "escalated_defensa",
+}
+
 # Keyword exacto que un usuario puede mandar para resetear su conversación
 # entera en pruebas. No usar palabras que un cliente real podría escribir.
 RESET_KEYWORD = "Reset"
@@ -473,7 +483,7 @@ def manychat_webhook(
         # de ManyChat debe tener el Condition de conversation_ended ANTES del
         # "Send Message" para que no se envíe nada.
         stage = (customer.get("stage") or "").strip()
-        if stage.startswith("escalated_"):
+        if stage in HUMAN_HANDOFF_STAGES:
             save_message(customer["id"], "user", payload.text)
             try:
                 set_bot_reply(subscriber_id=payload.user_id, text="")
