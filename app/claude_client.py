@@ -572,14 +572,14 @@ NON_SERVICE_CATEGORIES = {
 CLASSIFY_INQUIRY_PROMPT = """Eres un clasificador. Tu única tarea es leer el mensaje del usuario y devolver UN SOLO código de categoría, sin texto adicional, sin explicaciones, sin puntuación.
 
 Categorías posibles:
-- service: el usuario busca servicios contables o fiscales del despacho (declaración anual, contabilidad mensual, RFC, e.firma, regularización, alta SAT, etc.)
+- service: el usuario busca servicios contables o fiscales del despacho, O menciona CUALQUIER tema relacionado con impuestos, el SAT, dinero por pagar a una autoridad, o un documento/aviso que recibió. Ejemplos: declaración anual, contabilidad mensual, RFC, e.firma, regularización, alta SAT, multas, adeudos, requerimientos, créditos fiscales, embargos, devoluciones, facturas, nómina, "me llegó un correo/carta/notificación", "debo pagar algo", "me están cobrando", etc. Ante la MÍNIMA posibilidad de que sea un tema fiscal/contable/de pago, es service.
 - busca_practicas: el usuario es estudiante o egresado pidiendo prácticas profesionales, servicio social, estancias, residencia profesional o similar
 - proveedor_servicios: el usuario ofrece productos o servicios al despacho (software, marketing, papelería, agencia, mantenimiento, capacitación, etc.)
 - solicita_empleo: el usuario busca trabajo o vacante en el despacho, manda CV, pregunta si contratan
 - medios_prensa: periodista, medio de comunicación, podcast, entrevista, colaboración de contenido
 - otra_no_servicio: cualquier otra cosa que NO sea solicitud de servicios contables (saludos no clasificables NO van aquí — saludos cuentan como service por defecto)
 
-Regla de oro: si el mensaje es ambiguo, un saludo, "hola", o no estás seguro, responde `service`. Solo clasifica como no-servicio cuando el mensaje sea CLARAMENTE no-servicio.
+Regla de oro: ante CUALQUIER duda, ambigüedad, saludo, o si el mensaje PODRÍA tener que ver con dinero, pagos, impuestos, el SAT o un documento/correo que la persona recibió → responde `service`. SOLO clasifica como no-servicio cuando sea INEQUÍVOCAMENTE no-servicio (claramente busca empleo, ofrece productos/servicios al despacho, pide prácticas/servicio social, o es prensa). En la duda, SIEMPRE service.
 
 Devuelve únicamente uno de: service, busca_practicas, proveedor_servicios, solicita_empleo, medios_prensa, otra_no_servicio.
 """
