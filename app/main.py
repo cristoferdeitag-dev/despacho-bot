@@ -293,7 +293,7 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
                     set_conversation_ended(subscriber_id=payload.user_id, ended=True)
                 except Exception as e:
                     logger.warning(f"No se pudo set conversation_ended en non-service: {e}")
-                set_bot_reply(subscriber_id=payload.user_id, text=fixed_reply)
+                set_bot_reply(subscriber_id=payload.user_id, text=fixed_reply, channel=(payload.channel or "whatsapp"))
                 return
 
         channel = payload.channel or "whatsapp"
@@ -352,7 +352,7 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             set_conversation_ended(subscriber_id=payload.user_id, ended=False)
         except Exception as e:
             logger.warning(f"No se pudo limpiar conversation_ended en turn normal: {e}")
-        set_bot_reply(subscriber_id=payload.user_id, text=reply_clean)
+        set_bot_reply(subscriber_id=payload.user_id, text=reply_clean, channel=channel)
 
         # Router de contenido: si el bot decidió compartir un recurso del
         # despacho (audio/video/guión), dispara el flujo de ManyChat después
@@ -429,7 +429,7 @@ def manychat_webhook(
                 set_conversation_ended(subscriber_id=payload.user_id, ended=False)
             except Exception as e:
                 logger.warning(f"No se pudo limpiar conversation_ended en Reset: {e}")
-            set_bot_reply(subscriber_id=payload.user_id, text=reply)
+            set_bot_reply(subscriber_id=payload.user_id, text=reply, channel=(payload.channel or "whatsapp"))
             logger.info(
                 f"Reset manual de {customer['id']} — {deleted} mensajes borrados, "
                 f"tags quitados: {removed_tags or 'ninguno'}"

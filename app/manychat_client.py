@@ -88,14 +88,20 @@ def send_flow(subscriber_id: str, flow_ns: str) -> bool:
         return False
 
 
-def set_bot_reply(subscriber_id: str, text: str) -> bool:
+def set_bot_reply(subscriber_id: str, text: str, channel: str = "messenger") -> bool:
     """Entrega la respuesta del bot.
 
-    1) La escribe en el custom field `ai_response` (compat con cualquier flow que aún
-       lea {{ai_response}}).
-    2) Si hay texto real, la ENTREGA DIRECTO vía send_direct_message — así no dependemos
-       del bloque "Enviar mensaje" del flow (que mandaba duplicados por el race del
-       custom field global). Texto vacío = silencio/handoff → no se envía nada.
+    1) La escribe en el custom field `ai_response` (lo lee el bloque "Enviar mensaje"
+       del flow con {{ai_response}}).
+    2) Entrega:
+       - En MESSENGER/IG: la manda DIRECTO vía send_direct_message (sendContent), que
+         evita el race del custom field global y entrega una sola vez. (En estos
+         canales el flow ya NO tiene bloque "Enviar mensaje".)
+       - En WHATSAPP: NO se manda directo. La API de WhatsApp rechaza sendContent
+         fuera de la ventana de sesión (error 3011 "without a message tag"). La
+         entrega la hace el bloque "Enviar mensaje {{ai_response}}" del flow, que sí
+         corre dentro de la sesión. Aquí solo dejamos ai_response seteado.
+       Texto vacío = silencio/handoff → no se envía nada.
     """
     if not settings.MANYCHAT_API_TOKEN:
         logger.error("MANYCHAT_API_TOKEN no configurado — no puedo guardar respuesta")
@@ -123,8 +129,10 @@ def set_bot_reply(subscriber_id: str, text: str) -> bool:
         except Exception as e:
             logger.exception(f"Error inesperado al actualizar custom field: {e}")
 
-    # Entrega directa (la real). Solo texto no vacío; vacío = silencio/handoff.
-    if text and text.strip():
+    # Entrega directa SOLO en Messenger/IG. En WhatsApp la API rechaza el envío
+    # fuera de sesión (3011); ahí entrega el bloque "Enviar mensaje {{ai_response}}"
+    # del flow. Texto vacío = silencio/handoff → no se envía nada.
+    if text and text.strip() and channel != "whatsapp":
         send_direct_message(subscriber_id, text)
     return ok_field
 
