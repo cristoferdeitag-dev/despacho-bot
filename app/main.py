@@ -27,6 +27,7 @@ from app.manychat_client import (
     apply_tag,
     remove_tag,
     get_subscriber_tags,
+    send_flow,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -42,6 +43,24 @@ DEBOUNCE_SECONDS = 4.0
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
 PHONE_SAVE_PATTERN = re.compile(r"\[SAVE:phone:([+0-9\s\-()]+)\]")
+SENDFLOW_PATTERN = re.compile(r"\[ACTION:SENDFLOW:([A-Z_]+)\]")
+
+# Router de contenido: mapea una intención (key que el bot emite con
+# [ACTION:SENDFLOW:KEY]) al flow_ns del flujo de ManyChat que YA contiene el
+# audio/video/guión correcto del despacho. ns verificados del workspace
+# 110240088419870 (getFlows, 2026-06-14). Si una key no está aquí, se ignora.
+CONTENT_FLOWS = {
+    "DECLARACION_ANUAL": "content20260209192728_479506",  # Presentar Declaración Anual
+    "ADEUDO": "content20260209193357_611926",             # Declaración / Adeudo Fiscal
+    "RECHAZADA": "content20260209193236_888524",          # Declaración Rechazada
+    "ALTA_RFC": "content20260209232027_167152",           # Nueva alta en el RFC (video e.firma)
+    "MENSUAL_PF": "content20260209185953_202899",         # Física - Servicio Contable Mensual
+    "MENSUAL_PM": "content20260209185428_206642",         # Moral - Servicio Contable Mensual
+    "REGULARIZACION_PF": "content20260203181752_033158",  # Física - Audio Regularización
+    "REGULARIZACION_PM": "content20260209185103_386754",  # Moral - Audio Regularización
+    "CUENTA_BANCARIA": "content20260209211955_250160",    # Cuenta bancaria
+    "MENU": "content20260209213603_730337",               # Menú Principal 2.0
+}
 BOLD_MARKDOWN_PATTERN = re.compile(r"\*\*(.+?)\*\*")
 WHATSAPP_BOLD_PATTERN = re.compile(r"(?<!\S)\*([^\n*]+?)\*(?!\S)")
 
@@ -97,6 +116,20 @@ def extract_escalation(reply_text: str) -> tuple[str, str | None]:
     category = match.group(1) if match else None
     clean_text = ESCALATE_PATTERN.sub("", reply_text).strip()
     return clean_text, category
+
+
+def extract_sendflow(reply_text: str) -> tuple[str, str | None]:
+    """Saca el marcador [ACTION:SENDFLOW:KEY] del texto. Devuelve (texto_limpio,
+    flow_ns) donde flow_ns es el ns del flujo de ManyChat a disparar, o None si
+    no hay marcador o la key no está en el catálogo."""
+    match = SENDFLOW_PATTERN.search(reply_text)
+    clean_text = SENDFLOW_PATTERN.sub("", reply_text).strip()
+    if not match:
+        return clean_text, None
+    flow_ns = CONTENT_FLOWS.get(match.group(1))
+    if not flow_ns:
+        logger.warning(f"SENDFLOW key desconocida ignorada: {match.group(1)}")
+    return clean_text, flow_ns
 
 
 def handle_escalation(customer: dict, category: str, payload: ManychatWebhookPayload) -> None:
@@ -185,6 +218,7 @@ def test_chat(payload: ManychatWebhookPayload, x_webhook_secret: str | None = He
     reply_clean, block_action = extract_block_action(reply_raw)
     reply_clean, escalation_category = extract_escalation(reply_clean)
     reply_clean, phone_collected = extract_phone_save(reply_clean)
+    reply_clean, sendflow_ns = extract_sendflow(reply_clean)
 
     if channel == "whatsapp":
         reply_clean = whatsapp_format(reply_clean)
@@ -198,6 +232,7 @@ def test_chat(payload: ManychatWebhookPayload, x_webhook_secret: str | None = He
         "block_action": block_action,
         "escalation": escalation_category,
         "phone_collected": phone_collected,
+        "sendflow_ns": sendflow_ns,
         "customer_id": customer["id"],
     }
 
@@ -272,6 +307,7 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
         reply_clean, block_action = extract_block_action(reply_raw)
         reply_clean, escalation_category = extract_escalation(reply_clean)
         reply_clean, phone_collected = extract_phone_save(reply_clean)
+        reply_clean, sendflow_ns = extract_sendflow(reply_clean)
 
         if channel == "whatsapp":
             reply_clean = whatsapp_format(reply_clean)
@@ -317,6 +353,17 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
         except Exception as e:
             logger.warning(f"No se pudo limpiar conversation_ended en turn normal: {e}")
         set_bot_reply(subscriber_id=payload.user_id, text=reply_clean)
+
+        # Router de contenido: si el bot decidió compartir un recurso del
+        # despacho (audio/video/guión), dispara el flujo de ManyChat después
+        # del texto. Best-effort, no rompe el turno si falla.
+        if sendflow_ns:
+            try:
+                send_flow(payload.user_id, sendflow_ns)
+                logger.info(f"Router: flujo {sendflow_ns} disparado para {customer['id']}")
+            except Exception as e:
+                logger.warning(f"No se pudo disparar flujo {sendflow_ns}: {e}")
+
         logger.info(f"Respondido a {customer['id']}: {len(pending)} msg(s) agregados")
     except Exception as e:
         logger.exception(f"Error procesando mensaje en background: {e}")

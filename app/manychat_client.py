@@ -18,6 +18,7 @@ logger = logging.getLogger("despacho-bot.manychat")
 MANYCHAT_API_BASE = "https://api.manychat.com"
 SET_CUSTOM_FIELD_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/setCustomField"
 SEND_FLOW_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/sending/sendContent"
+SEND_FLOW_NS_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/sending/sendFlow"
 ADD_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/addTagByName"
 REMOVE_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/removeTagByName"
 GET_INFO_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/getInfo"
@@ -56,6 +57,34 @@ def send_direct_message(subscriber_id: str, text: str) -> bool:
         return False
     except Exception as e:
         logger.exception(f"Error inesperado en send_direct_message: {e}")
+        return False
+
+
+def send_flow(subscriber_id: str, flow_ns: str) -> bool:
+    """Dispara un flujo EXISTENTE de ManyChat (por su flow_ns) al subscriber.
+
+    Sirve para que el bot actúe como "router de contenido": detecta la intención
+    y manda el flujo del despacho que ya contiene el audio/video/guión correcto
+    (declaración anual, regularización, video e.firma, cuenta bancaria, etc.).
+    Requiere ventana de 24h abierta (el cliente escribió primero) porque los
+    flujos llevan contenido libre. Best-effort: si falla, se loguea y seguimos.
+    """
+    if not settings.MANYCHAT_API_TOKEN:
+        logger.error("MANYCHAT_API_TOKEN no configurado — no puedo enviar flujo")
+        return False
+    if not flow_ns:
+        return False
+    payload = {"subscriber_id": subscriber_id, "flow_ns": flow_ns}
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(SEND_FLOW_NS_ENDPOINT, json=payload, headers=_auth_headers())
+        if response.status_code == 200 and response.json().get("status") == "success":
+            logger.info(f"Flujo {flow_ns} enviado a {subscriber_id}")
+            return True
+        logger.error(f"Error en send_flow {flow_ns}: {response.status_code} — {response.text[:300]}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error inesperado en send_flow {flow_ns}: {e}")
         return False
 
 
