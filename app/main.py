@@ -496,31 +496,14 @@ def manychat_webhook(
         saved = save_message(customer["id"], "user", payload.text)
         my_msg_id = saved[0]["id"] if saved else None
 
-        # Dedup: si el user mandó exactamente la misma texto en los últimos 30s
-        # (caso típico: reenvió por impaciencia), no reproceses — el bot ya
-        # respondió la primera vez. Setea conversation_ended=true para que el
-        # Condition de ManyChat corte el Send Message; el próximo mensaje
-        # nuevo del user volverá a abrir el flujo normal.
-        prev = get_previous_user_message(customer["id"], exclude_id=my_msg_id)
-        if prev and prev.get("content", "").strip() == payload.text.strip():
-            try:
-                from datetime import datetime, timezone, timedelta
-                prev_ts = datetime.fromisoformat(
-                    prev["created_at"].replace("Z", "+00:00")
-                )
-                age = datetime.now(timezone.utc) - prev_ts
-                if age < timedelta(seconds=30):
-                    logger.info(
-                        f"Dedup: skip — user reenvió mismo texto en {age.total_seconds():.1f}s"
-                    )
-                    try:
-                        set_bot_reply(subscriber_id=payload.user_id, text="")
-                        set_conversation_ended(subscriber_id=payload.user_id, ended=True)
-                    except Exception as e:
-                        logger.warning(f"No se pudo silenciar dedup: {e}")
-                    return {"status": "dedup", "msg_id": my_msg_id}
-            except Exception as e:
-                logger.warning(f"Error en check de dedup: {e}")
+        # NOTA: antes había aquí un "dedup" que, si el user reenviaba el mismo
+        # texto en <30s, seteaba conversation_ended=true y silenciaba. BUG: con el
+        # debounce "latest wins", el mensaje original se saltaba (hay uno más
+        # reciente) y el reenvío se deduplicaba → NADIE respondía y el bot quedaba
+        # mudo (clientes mandando 2 veces lo mismo). Se ELIMINÓ. La de-duplicación
+        # real ya la hacen el debounce (procesa solo el último y agrega todos los
+        # pendientes) + la idempotencia (has_assistant_reply_after) en
+        # _process_user_turn, sin silenciar nunca.
 
         # Procesa en segundo plano y responde 200 de inmediato (evita el timeout
         # de 10s del External Request de ManyChat). El flujo espera con su Pausa.
