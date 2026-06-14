@@ -38,7 +38,7 @@ app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
 # Segundos a esperar antes de procesar, para agregar mensajes fragmentados.
 # 4s con Haiku (~1-2s) total ~5-6s — la latencia más baja que Claude no
 # se sienta lento. Reduce las veces que el cliente reenvía por impaciencia.
-DEBOUNCE_SECONDS = 4.0
+DEBOUNCE_SECONDS = 1.5
 
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
