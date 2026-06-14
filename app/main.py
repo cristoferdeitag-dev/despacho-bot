@@ -443,6 +443,25 @@ def manychat_webhook(
             save_message(customer["id"], "user", payload.text)
             return {"status": "blocked"}
 
+        # 🔒 Candado WhatsApp: el bot SOLO atiende contactos NUEVOS (con la
+        # etiqueta `lead-nuevo`). Doble seguro además de la Condición de
+        # ManyChat: si el webhook recibe un contacto de WhatsApp SIN lead-nuevo
+        # (p.ej. un cliente viejo o conversación previa), el bot se queda
+        # callado y NUNCA le escribe — lo atiende un humano como hoy. Solo
+        # aplica a WhatsApp; Messenger/Instagram siguen igual.
+        if (payload.channel or "whatsapp") == "whatsapp":
+            try:
+                wa_tags = get_subscriber_tags(payload.user_id)
+            except Exception as e:
+                logger.warning(f"No pude leer tags de {payload.user_id}: {e}")
+                wa_tags = []
+            if "lead-nuevo" not in wa_tags:
+                save_message(customer["id"], "user", payload.text)
+                logger.info(
+                    f"WhatsApp gate: {customer['id']} sin etiqueta lead-nuevo → bot en silencio"
+                )
+                return {"status": "skipped_not_new"}
+
         # Silencio total para customers ya tageados — humano toma desde aquí.
         # El bot guarda el mensaje en historial (para que Soraida vea contexto),
         # marca ai_response vacío + conversation_ended=true. La automatización
