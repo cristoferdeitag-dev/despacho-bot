@@ -108,7 +108,10 @@ def set_bot_reply(subscriber_id: str, text: str, channel: str = "messenger") -> 
         return False
 
     ok_field = False
-    if settings.MANYCHAT_AI_RESPONSE_FIELD_ID:
+    # Solo seteamos ai_response cuando hay texto real. ManyChat rechaza el string
+    # vacío con "Invalid field value" (HTTP 400); en silencio/handoff no tocamos
+    # el campo — la entrega la corta la Condición conversation_ended del flow.
+    if settings.MANYCHAT_AI_RESPONSE_FIELD_ID and text and text.strip():
         payload = {
             "subscriber_id": subscriber_id,
             "field_id": int(settings.MANYCHAT_AI_RESPONSE_FIELD_ID),
