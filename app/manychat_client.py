@@ -132,10 +132,11 @@ def set_bot_reply(subscriber_id: str, text: str, channel: str = "messenger") -> 
         except Exception as e:
             logger.exception(f"Error inesperado al actualizar custom field: {e}")
 
-    # Entrega directa SOLO en Messenger/IG. En WhatsApp la API rechaza el envío
-    # fuera de sesión (3011); ahí entrega el bloque "Enviar mensaje {{ai_response}}"
-    # del flow. Texto vacío = silencio/handoff → no se envía nada.
-    if text and text.strip() and channel != "whatsapp":
+    # Entrega DIRECTA en todos los canales (incl. WhatsApp). El bot manda él mismo
+    # la respuesta cuando termina, sin depender del bloque "Enviar mensaje" del
+    # flow (cuyo timing es frágil con el debounce). El cliente escribió primero,
+    # así que la ventana de 24h está abierta. Texto vacío = silencio → no se envía.
+    if text and text.strip():
         send_direct_message(subscriber_id, text)
     return ok_field
 
