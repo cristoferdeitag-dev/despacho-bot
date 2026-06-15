@@ -19,6 +19,11 @@ MANYCHAT_API_BASE = "https://api.manychat.com"
 SET_CUSTOM_FIELD_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/setCustomField"
 SEND_FLOW_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/sending/sendContent"
 SEND_FLOW_NS_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/sending/sendFlow"
+
+# Mini-automatización "Respuesta Bot WA" (un solo paso: Enviar mensaje {{ai_response}}).
+# En WhatsApp la entrega se hace disparando este flow por sendFlow (sendContent da
+# 3011). El bot setea ai_response y luego dispara este flow → entrega {{ai_response}}.
+REPLY_FLOW_WA_NS = "content20260615000228_646429"
 ADD_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/addTagByName"
 REMOVE_TAG_BY_NAME_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/removeTagByName"
 GET_INFO_ENDPOINT = f"{MANYCHAT_API_BASE}/fb/subscriber/getInfo"
@@ -132,13 +137,16 @@ def set_bot_reply(subscriber_id: str, text: str, channel: str = "messenger") -> 
         except Exception as e:
             logger.exception(f"Error inesperado al actualizar custom field: {e}")
 
-    # Entrega directa SOLO en Messenger/IG. En WhatsApp la API de ManyChat rechaza
-    # sendContent con error 3011 ("last interaction over 24h") porque NO registra
-    # la última interacción del contacto de WhatsApp (confirmado 2x). Por eso en
-    # WhatsApp la entrega la hace el bloque "Enviar mensaje {{ai_response}}" del
-    # flow (corre en sesión, sí permitido). Texto vacío = silencio → no se envía.
-    if text and text.strip() and channel != "whatsapp":
-        send_direct_message(subscriber_id, text)
+    # Entrega (texto no vacío; vacío = silencio/handoff → no se envía):
+    # - Messenger/IG: directo vía sendContent (funciona).
+    # - WhatsApp: sendContent da 3011, pero sendFlow SÍ entrega en sesión
+    #   (confirmado: el audio del router llegó). Disparamos la mini-automatización
+    #   "Respuesta Bot WA" que manda {{ai_response}} (ya seteado arriba).
+    if text and text.strip():
+        if channel == "whatsapp":
+            send_flow(subscriber_id, REPLY_FLOW_WA_NS)
+        else:
+            send_direct_message(subscriber_id, text)
     return ok_field
 
 
