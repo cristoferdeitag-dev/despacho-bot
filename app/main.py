@@ -267,6 +267,22 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             )
             return
 
+        # 🔒 Candado WhatsApp (aquí, DESPUÉS del debounce → el tag lead-nuevo ya
+        # aterrizó): el bot SOLO atiende contactos con etiqueta `lead-nuevo`.
+        # Clientes viejos / conversaciones previas no la tienen → el bot se queda
+        # callado y NUNCA les escribe. Fail-safe: si falla leer tags, silencio.
+        if (payload.channel or "whatsapp") == "whatsapp":
+            try:
+                wa_tags = get_subscriber_tags(payload.user_id)
+            except Exception as e:
+                logger.warning(f"No pude leer tags de {payload.user_id}: {e}")
+                wa_tags = []
+            if "lead-nuevo" not in wa_tags:
+                logger.info(
+                    f"WhatsApp gate (bg): {customer['id']} sin lead-nuevo → bot en silencio"
+                )
+                return
+
         pending = get_user_messages_since_last_assistant(customer["id"])
         if not pending:
             logger.warning(f"No pending messages for {customer['id']} — caso raro")
@@ -458,24 +474,13 @@ def manychat_webhook(
             save_message(customer["id"], "user", payload.text)
             return {"status": "blocked"}
 
-        # 🔒 Candado WhatsApp: el bot SOLO atiende contactos NUEVOS (con la
-        # etiqueta `lead-nuevo`). Doble seguro además de la Condición de
-        # ManyChat: si el webhook recibe un contacto de WhatsApp SIN lead-nuevo
-        # (p.ej. un cliente viejo o conversación previa), el bot se queda
-        # callado y NUNCA le escribe — lo atiende un humano como hoy. Solo
-        # aplica a WhatsApp; Messenger/Instagram siguen igual.
-        if (payload.channel or "whatsapp") == "whatsapp":
-            try:
-                wa_tags = get_subscriber_tags(payload.user_id)
-            except Exception as e:
-                logger.warning(f"No pude leer tags de {payload.user_id}: {e}")
-                wa_tags = []
-            if "lead-nuevo" not in wa_tags:
-                save_message(customer["id"], "user", payload.text)
-                logger.info(
-                    f"WhatsApp gate: {customer['id']} sin etiqueta lead-nuevo → bot en silencio"
-                )
-                return {"status": "skipped_not_new"}
+        # NOTA: el 🔒 candado WhatsApp (solo atender contactos con etiqueta
+        # `lead-nuevo`) se movió a _process_user_turn, DESPUÉS del debounce —
+        # así el tag `lead-nuevo` (que pone la automatización "contacto nuevo")
+        # ya aterrizó y no perdemos el PRIMER mensaje de un lead nuevo por race.
+        # Esto permite quitar la Pausa inteligente y la Condición del flow de
+        # ManyChat (que perdían mensajes en ráfaga). Clientes viejos = sin
+        # lead-nuevo → el bot se queda callado igual (fail-safe).
 
         # Silencio total para customers ya tageados — humano toma desde aquí.
         # El bot guarda el mensaje en historial (para que Soraida vea contexto),
