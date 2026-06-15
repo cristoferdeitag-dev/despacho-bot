@@ -86,6 +86,17 @@ HUMAN_HANDOFF_STAGES = {
     "escalated_defensa",
 }
 
+# --- Remarketing (Fase 2) ---
+# Etiqueta-interruptor que mete al lead a la secuencia "Remarketing" de ManyChat
+# (vía una Regla: "se agrega etiqueta remarketing" → suscribir a la secuencia).
+# El bot la PONE mientras el lead siga siendo un prospecto sin cerrar, y la QUITA
+# cuando pasa con la contadora (INTERESADO/REGULARIZACION/CLIENTE), no le interesa
+# (NO_INTERESADO) o se bloquea. Las plantillas R1/R2 de la secuencia llevan
+# condición de envío "tiene etiqueta remarketing", así que un lead ya convertido
+# deja de recibir recordatorios en cuanto le quitamos la etiqueta.
+REMARKETING_TAG = "remarketing"
+REMARKETING_STOP_CATEGORIES = {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO"}
+
 # Keyword exacto que un usuario puede mandar para resetear su conversación
 # entera en pruebas. No usar palabras que un cliente real podría escribir.
 RESET_KEYWORD = "Reset"
@@ -282,6 +293,15 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
                     f"WhatsApp gate (bg): {customer['id']} sin lead-nuevo → bot en silencio"
                 )
                 return
+            # Remarketing (Fase 2): el lead ACABA de escribir → quítale la etiqueta
+            # "remarketing" para CANCELAR cualquier recordatorio/borrado pendiente
+            # (Regla "CANCELAR" lo desuscribe de la secuencia). Si al final NO cerró,
+            # se la reponemos abajo → re-arma el contador desde ESTE mensaje. Así el
+            # borrado automático SOLO alcanza a quien de verdad nunca contestó.
+            try:
+                remove_tag(payload.user_id, REMARKETING_TAG)
+            except Exception as e:
+                logger.warning(f"No se pudo limpiar remarketing al entrar: {e}")
 
         pending = get_user_messages_since_last_assistant(customer["id"])
         if not pending:
@@ -371,6 +391,22 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             # conversation_ended=true at that point. The handoff message
             # itself still reaches the user.
 
+        # Remarketing (Fase 2): re-arma el drip. Ya quitamos "remarketing" al
+        # entrar el mensaje (cancela lo pendiente). Aquí, SOLO si el lead sigue
+        # siendo prospecto activo (no cerró con la contadora, no es no-interesado,
+        # no se bloqueó), le REPONEMOS la etiqueta → la Regla "SUSCRIBIR" lo mete a
+        # la secuencia con el contador reiniciado desde este mensaje. Si cerró, NO
+        # la reponemos → se queda fuera del drip y del borrado (lo atiende Soraida).
+        if channel == "whatsapp":
+            try:
+                if escalation_category in REMARKETING_STOP_CATEGORIES or block_action:
+                    logger.info(f"Remarketing OFF para {customer['id']} ({escalation_category or block_action})")
+                else:
+                    apply_tag(payload.user_id, REMARKETING_TAG)
+                    logger.info(f"Remarketing ON (re-armado) para {customer['id']}")
+            except Exception as e:
+                logger.warning(f"No se pudo gestionar etiqueta remarketing: {e}")
+
         # Make sure conversation_ended is false for this turn so the Send
         # Message Condition in ManyChat lets our reply through. Costs one
         # extra ManyChat API call per turn but it's cheap and idempotent.
@@ -444,6 +480,8 @@ def manychat_webhook(
                 "No Interesado",
                 "CLIENTE",
                 "IMPORTANTE",
+                "remarketing",
+                "No respondió",
             ]
             current_tags = get_subscriber_tags(payload.user_id)
             removed_tags = []
