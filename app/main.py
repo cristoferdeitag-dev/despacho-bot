@@ -91,11 +91,17 @@ HUMAN_HANDOFF_STAGES = {
 # (vía una Regla: "se agrega etiqueta remarketing" → suscribir a la secuencia).
 # El bot la PONE mientras el lead siga siendo un prospecto sin cerrar, y la QUITA
 # cuando pasa con la contadora (INTERESADO/REGULARIZACION/CLIENTE), no le interesa
-# (NO_INTERESADO) o se bloquea. Las plantillas R1/R2 de la secuencia llevan
-# condición de envío "tiene etiqueta remarketing", así que un lead ya convertido
-# deja de recibir recordatorios en cuanto le quitamos la etiqueta.
+# (NO_INTERESADO), está en SEGUIMIENTO o se bloquea. Las plantillas R1/R2 de la
+# secuencia llevan condición de envío "tiene etiqueta remarketing", así que un lead
+# ya convertido deja de recibir recordatorios en cuanto le quitamos la etiqueta.
+#
+# SEGUIMIENTO (necesita ir al SAT a sacar e.firma/RFC/contraseña y volver — puede
+# tardar SEMANAS o un mes) NO va al remarketing agresivo (R1 20h / R2 2d / borrado
+# 4d): se le borraría un lead bueno por tardar en su papeleo. En su lugar recibe la
+# etiqueta "Seguimiento" (vía ESCALATION_TAGS) → una secuencia SUAVE aparte en
+# ManyChat (recordatorio 1sem/2sem/1mes, SIN borrado).
 REMARKETING_TAG = "remarketing"
-REMARKETING_STOP_CATEGORIES = {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO"}
+REMARKETING_STOP_CATEGORIES = {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO", "SEGUIMIENTO"}
 
 # Keyword exacto que un usuario puede mandar para resetear su conversación
 # entera en pruebas. No usar palabras que un cliente real podría escribir.
