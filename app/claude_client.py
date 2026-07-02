@@ -1,3 +1,5 @@
+import re
+
 from anthropic import Anthropic
 from app.config import settings
 
@@ -585,7 +587,13 @@ def build_system_prompt(
         )
 
     # Solo la parte DINÁMICA (el nombre va aquí para no romper el caché del prompt).
-    user_block = f"\n# DATOS DEL CLIENTE\n- Nombre del cliente: {name}\n"
+    user_block = (
+        f"\n# DATOS DEL CLIENTE\n- Nombre del cliente: {name}\n"
+        f"⚠️ En los ejemplos de este prompt, «[Nombre]» es un MARCADOR: reemplázalo "
+        f"SIEMPRE por el nombre real de arriba ({name}). NUNCA escribas literalmente "
+        f"«[Nombre]» ni corchetes. Si el nombre es «Amigo» (no lo conoces), mejor OMITE "
+        f"el nombre y no pongas ningún marcador.\n"
+    )
     return user_block + current_time_block + channel_block + stage_block
 
 
@@ -640,6 +648,23 @@ def classify_inquiry(message: str) -> str:
         return "service"
 
 
+def _fix_name_placeholder(text: str, user_name: str | None) -> str:
+    """Red de seguridad: el modelo a veces copia el marcador literal '[Nombre]' de
+    los ejemplos del prompt en vez del nombre real del cliente. Si tenemos nombre,
+    lo sustituye (respetando los asteriscos de negrita); si no, quita el marcador y
+    limpia la coma/espacios sobrantes para que nunca salga '[Nombre]' al cliente."""
+    if not text or ("[Nombre]" not in text and "[nombre]" not in text):
+        return text
+    real = user_name.strip() if (user_name and user_name.strip()) else None
+    if real and real.lower() != "amigo":
+        return re.sub(r"\[[Nn]ombre\]", real, text)
+    # Sin nombre real: elimina ", *[Nombre]*" / "*[Nombre]*" y arregla puntuación.
+    text = re.sub(r",?\s*\*?\[[Nn]ombre\]\*?", "", text)
+    text = re.sub(r"\s+([.,!?])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text
+
+
 def generate_reply(history: list[dict], new_user_message: str, user_name: str | None = None,
                    channel: str = "whatsapp", phone: str | None = None,
                    customer_stage: str | None = None) -> str:
@@ -663,7 +688,7 @@ def generate_reply(history: list[dict], new_user_message: str, user_name: str | 
 
     for block in response.content:
         if block.type == "text":
-            return block.text
+            return _fix_name_placeholder(block.text, user_name)
 
     return "Disculpe, tuve un problema procesando su mensaje. ¿Podría intentar de nuevo?"
 
