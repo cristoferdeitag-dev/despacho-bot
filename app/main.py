@@ -40,6 +40,12 @@ app = FastAPI(title="Despacho Contable Fiscal Bot", version="0.1.0")
 # se sienta lento. Reduce las veces que el cliente reenvía por impaciencia.
 DEBOUNCE_SECONDS = 8.0
 
+# Variables de ManyChat sin renderizar (p.ej. "{{last_input_text}}"): llegan
+# así cuando una automatización (secuencia/broadcast) dispara el External
+# Request en un contexto donde la variable no existe. NO son mensajes del
+# cliente. Ráfagas vistas 2026-07-01 y 2026-07-08 (varios leads en minutos).
+UNRENDERED_TEMPLATE_PATTERN = re.compile(r"^\s*(\{\{[\w\s.|]+\}\}\s*)+$")
+
 BLOCK_ACTION_PATTERN = re.compile(r"\[ACTION:(BLOCK_RUDE|BLOCK_CRISIS)\]")
 ESCALATE_PATTERN = re.compile(r"\[ACTION:ESCALATE:(INTERESADO|REGULARIZACION|SEGUIMIENTO|NO_INTERESADO|CLIENTE)\]")
 PHONE_SAVE_PATTERN = re.compile(r"\[SAVE:phone:([+0-9\s\-()]+)\]")
@@ -318,7 +324,13 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
         history = get_conversation_history(customer["id"], limit=40)
         history_clean = [
             h for h in history
-            if h["role"] == "assistant" or h["content"] not in [m["content"] for m in pending]
+            # Fuera del contexto del modelo cualquier mensaje con plantillas
+            # {{...}} sin renderizar: tanto la basura que entró de ManyChat como
+            # las respuestas "modo configuración" que el bot dio por culpa de esa
+            # basura (p.ej. "Perfecto, {{first_name}}..."). Limpia el veneno ya
+            # guardado sin tocar la base.
+            if "{{" not in (h["content"] or "")
+            and (h["role"] == "assistant" or h["content"] not in [m["content"] for m in pending])
         ]
 
         # Non-service triage — only for brand-new leads (no prior conversation).
@@ -465,6 +477,19 @@ def manychat_webhook(
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
     logger.info(f"Mensaje de {payload.user_id}: {payload.text[:80]}")
+
+    # 🛡️ Vacuna anti-plantilla: si el "mensaje" es una variable de ManyChat sin
+    # renderizar, se ignora por completo — ni se guarda (envenenaba el historial
+    # y el modelo entraba en "modo configuración") ni se responde. Se silencia
+    # el flow igual que el silent handoff para que no reenvíe un ai_response viejo.
+    if UNRENDERED_TEMPLATE_PATTERN.match(payload.text or ""):
+        logger.warning(f"Template sin renderizar de {payload.user_id} ({payload.text[:40]!r}) — ignorado")
+        try:
+            set_bot_reply(subscriber_id=payload.user_id, text="")
+            set_conversation_ended(subscriber_id=payload.user_id, ended=True)
+        except Exception as e:
+            logger.warning(f"No se pudo silenciar flow tras template: {e}")
+        return {"status": "ignored_unrendered_template"}
 
     try:
         customer = get_or_create_customer(

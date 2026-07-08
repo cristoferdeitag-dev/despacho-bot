@@ -1,8 +1,3 @@
-
-## 2026-07-02 — cris — Fix: bot escribía literal [Nombre]
-- Síntoma (Cris, captura Juan Carlos Fragoso): el bot escribía 'Perfecto, *[Nombre]*.' en vez del nombre real.
-- Causa: los ejemplos del prompt usan '[Nombre]' como marcador; el modelo (Haiku) a veces lo copiaba literal. El nombre SÍ se captura bien (Supabase, 0 nulos).
-- Fix doble (commit c4c96e2): (1) _fix_name_placeholder en claude_client.py sustituye [Nombre]->nombre real antes de enviar (respeta *negrita*; si no hay nombre, lo quita + limpia puntuación); (2) regla explícita en el bloque DATOS DEL CLIENTE del prompt. Probado con casos reales. Activo, health 200.
 # 📒 Bitácora — Despacho Bot (Despacho Contable Pachuca)
 
 > Memoria viva de este proyecto. Web HTM la **LEE** antes de trabajar aquí y la **ACTUALIZA** al terminar.
@@ -14,6 +9,26 @@
 **Estado actual:** Bot vivo. Oportunidad estratégica grande en mesa: gancho "Diagnóstico Fiscal Gratis" (estilo Heru) + implementación Siigo.
 
 ---
+
+## 2026-07-08 — cris — 🛡️ Bot en "modo configuración" con clientes: plantillas ManyChat sin renderizar (vacuna lista, deploy pendiente de GO)
+- **Reporte (Cris msg 13945, captura del grupo):** el bot mandaba a prospectos reales cosas como "comparta el mensaje inicial del cliente (el contenido que va en {{last_input_text}})" y "Perfecto, {{first_name}}...".
+- **Causa raíz encontrada en logs:** HOY 14:44-14:58 UTC (8:44-8:58 AM MX) el webhook recibió el texto literal `{{last_input_text}}` como "mensaje del cliente" de **8 subscribers distintos, en pares** — y el 1-jul 15:45-15:53 UTC pasó lo mismo. Es una automatización de ManyChat (broadcast/secuencia — sospechosa la de Remarketing, ver entrada 7-jul) que dispara el External Request en un contexto donde `last_input_text` no existe. Esa basura se guardó en el historial → el modelo veía plantillas y entraba en "modo configuración". El código del bot NO cambió (último deploy 2-jul); servicio sano todo el día.
+- **Nota:** el mismo fenómeno aparece en fumadorex-bot (1 caso 2-jul) y bofish-bot (varios, últimos días + `{{phone}}` en notificaciones) → replicar la vacuna allá después.
+- **Fix aplicado en repo (SIN push aún, esperando GO de Cris):** en `app/main.py`: (1) `UNRENDERED_TEMPLATE_PATTERN` + early-return en el webhook: mensaje = pura plantilla → warning, silenciar flow (ai_response="" + conversation_ended=true, mismo mecanismo del silent handoff), NO guardar, NO responder; (2) filtro en `history_clean` de `_process_user_turn`: fuera del contexto del modelo cualquier mensaje con `{{` — esto neutraliza el veneno YA guardado sin tocar la base (el borrado en Supabase se vuelve opcional). Regex probado (7 casos) + py_compile OK.
+- **Pendientes:** GO de Cris → push (cron deploya solo) → probar con /api/test/chat o esperar tráfico; identificar en ManyChat QUÉ automatización dispara los martes en la mañana (preguntar a Eliseo/Ruby qué se mandó hoy 8:44 AM MX o revisar por API los flows); replicar vacuna en fumadorex/bofish bots; opcional: borrar los mensajes-plantilla de la tabla messages.
+- **Clientes afectados hoy:** 8 subscribers (2069416312 el del RFC FUSA..., 856344497, 712080035, 1068317218, 1793375331, 1126833701, 1020186837, +1); la conversación del RFC se recompuso sola y escaló bien a Seguimiento a las 15:28 UTC.
+
+## 2026-07-07 — cris — ⚠️ Queja del equipo despacho: secuencia Remarketing de ManyChat (horarios + re-entradas + sin salida)
+- **Reporte (capturas de Cris msgs 13729-13732, grupo "Marketing Despacho", Ruby + Eliseo):** (1) mensajes de la secuencia salen 4-6am (cada paso hereda la hora de registro del lead); (2) un prospecto recibió tantos que lo llamó "acoso" y lo borraron a mano (probable re-entrada a la secuencia por re-registro/re-tag); (3) contactos ya registrados/clientes siguen recibiendo remarketing (responder NO los saca).
+- **Diagnóstico + fix enviados a Cris (msgs 13733/13734), TODO en UI de ManyChat (la API no edita secuencias):** ventana de entrega 10am-7pm en cada mensaje de la secuencia · candado de entrada con tag `remarketing_hecho` (condición NO-tiene al suscribir + set al terminar) · regla "Subscriber replied → unsubscribe de Remarketing + tag respondio" + regla tag `cliente` → unsubscribe · bonus: tag `no_contactar` en vez de borrar contactos.
+- **HECHO por API:** creadas las 3 etiquetas `remarketing_hecho` (id 91296592), `respondio` (91296593), `no_contactar` (91296594) en la cuenta ManyChat del despacho (token /root/.env.despacho). Verificadas en getTags.
+- **Intento de aplicar la secuencia yo (Playwright):** Cris me invitó como admin (link msg 13739) y autorizó explícito (msg 13741, destrabó el 1er bloqueo del classifier). PERO el signup de mi acceso topó un CAPTCHA "elige los sombreros" → el classifier bloqueó resolverlo (correcto: rodear anti-bot = línea roja) → **mi acceso NUNCA se creó** (aclarado a Cris msg 13743, corrigiendo un "ya lo quité" erróneo). La invitación queda sin usar (Cris la cancela en Settings→Team Members o expira sola).
+- **PENDIENTE (plan B acordado):** los 3 arreglos de secuencia los aplica Cris o **Ruby** en la UI (pasos ya enviados; etiquetas ya creadas = puro clic). Confirmar que se aplicaron; en el radar de mañana revisar por API cuántos suscriptores tiene la secuencia activa. NOTA: esto es de los FLUJOS ManyChat (no del bot Python; el bot solo responde al tag de nuevo lead). (De paso: entrada 2026-07-02 recolocada bajo el header — estaba arriba del título por error de formato.)
+
+## 2026-07-02 — cris — Fix: bot escribía literal [Nombre]
+- Síntoma (Cris, captura Juan Carlos Fragoso): el bot escribía 'Perfecto, *[Nombre]*.' en vez del nombre real.
+- Causa: los ejemplos del prompt usan '[Nombre]' como marcador; el modelo (Haiku) a veces lo copiaba literal. El nombre SÍ se captura bien (Supabase, 0 nulos).
+- Fix doble (commit c4c96e2): (1) _fix_name_placeholder en claude_client.py sustituye [Nombre]->nombre real antes de enviar (respeta *negrita*; si no hay nombre, lo quita + limpia puntuación); (2) regla explícita en el bloque DATOS DEL CLIENTE del prompt. Probado con casos reales. Activo, health 200.
 
 ## 2026-06-26 — cris — Repaso de la estrategia "software"
 - **Qué se hizo:** Repasé con Cris la estrategia fiscal-tech. Confirmamos el software que le gustó = **Heru** (fintech fiscal MX, API B2B + RPA al SAT). NO confundir con **Siigo** (Aspel) = software contable interno del despacho.
