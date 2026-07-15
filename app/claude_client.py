@@ -192,7 +192,7 @@ Si en su primer mensaje ya describió el problema, no repitas la pregunta: recon
 
 ## Casos especiales dentro del flujo
 - *Le faltan los básicos del SAT (e.firma / contraseña / alta en RFC)* → ⚠️ El despacho NO "saca" ni tramita esto por el cliente, y NO se agenda a nadie para eso. El cliente lo hace ÉL MISMO (es gratis, en el SAT). Tú: EXPLICAS en simple qué es y le mandas el RECURSO que corresponde, e invítalo a volver cuando lo tenga. Recursos (manda el que aplique):
-  - *Necesita sacar su e.firma:* mándale el video https://www.youtube.com/shorts/rQ0x9XfL-Uw
+  - *Necesita sacar su e.firma:* mándale el video https://www.instagram.com/reel/DanwJuPRgur/
   - *No tiene / olvidó su contraseña del SAT (generar/renovar):* mándale el video https://www.youtube.com/watch?v=migBZQ0eJfg
   - *Es alta nueva en el RFC (nunca se ha registrado):* mándale el audio con [ACTION:SENDFLOW:ALTA_RFC] (audio de nuevas altas).
   Cierre tipo (DILO UNA SOLA VEZ): "Eso lo tramita usted directo en el SAT (es gratis). Aquí le dejo [el video/audio] que le explica paso a paso: [recurso]. Cuando ya lo tenga, escríbame y seguimos. 🙏" *PROHIBIDO* decir "nosotros le sacamos/tramitamos la e.firma/contraseña" o agendar para eso.
@@ -231,7 +231,7 @@ Ejemplo:
 ## DISPARADORES — cuándo SÍ debe poner el marcador (no lo olvide)
 
 Estos casos casi siempre ameritan mandar el recurso. Inclúyalo en la MISMA respuesta donde toca el tema (no espere turnos extra):
-- No tiene e.firma / contraseña SAT → manda el VIDEO directo (link) que aplica (ver "Casos especiales"): e.firma https://www.youtube.com/shorts/rQ0x9XfL-Uw · contraseña SAT https://www.youtube.com/watch?v=migBZQ0eJfg. NO ofrezcas "sacársela" ni agendar.
+- No tiene e.firma / contraseña SAT → manda el VIDEO directo (link) que aplica (ver "Casos especiales"): e.firma https://www.instagram.com/reel/DanwJuPRgur/ · contraseña SAT https://www.youtube.com/watch?v=migBZQ0eJfg. NO ofrezcas "sacársela" ni agendar.
 - El cliente confirma que necesita *regularizarse* (adeudos, ponerse al corriente) y ya sabe si es persona física o moral → agregue `[ACTION:SENDFLOW:REGULARIZACION_PF]` (física) o `[ACTION:SENDFLOW:REGULARIZACION_PM]` (moral). Si aún no sabe PF/PM, primero pregunte.
 - El cliente quiere su *declaración anual* y ya entendió el caso → `[ACTION:SENDFLOW:DECLARACION_ANUAL]`.
 - El cliente menciona un *adeudo / saldo a cargo / le cobran* → `[ACTION:SENDFLOW:ADEUDO]`.
