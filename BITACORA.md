@@ -27,6 +27,10 @@
 
 ---
 
+## 2026-07-16 — cris — 🎯 Atribución de fuente desde el prefill de WhatsApp (cfaa52f, EN PROD)
+- `maybe_set_source_from_text()` en supabase_client.py, llamada tras get_or_create_customer en el webhook: detecta "Los encontré en Google"/"vengo de google" → first_source=google_ads; "vi sus videos" → web_videos; "Los encontré en <x>" → x (strip de _ del markdown). first_source solo se escribe la 1ª vez; last_source/source_detail siempre. Nunca truena el turno (try/except).
+- La contraparte web (despacho-web 462500b) añade el marcador al prefill cuando la visita trae gclid/utm. Verificado servicio activo tras auto-deploy cron.
+
 ## 2026-07-10 — cris — 🔎 CASO CERRADO: la "Solicitud externa rota" NO EXISTE — las llamadas basura son la llamada LEGÍTIMA con variable vacía
 - **Qué se hizo:** Cris ejecutó con Claude for Chrome DOS barridas exhaustivas de ManyChat buscando el paso "Solicitud externa" roto (URL contiene "despachobot" — criterio correcto: la URL real es `despachobot.haztumarketing.com/api/webhook/manychat`, Caddy → :8003). Revisó: Formulario y Seguimiento, Recordatorio 1 y 2, Etiquetar contacto nuevo, Saludo de Bienvenida (rama respuesta), Respuesta Bot WA, los 2 "Sin título", las 5 reglas (activas + borrador) y TODAS las automatizaciones con trigger de etiqueta. **Resultado: 0 Solicitudes externas fuera de la legítima. No se borró nada. "Bot IA Whats app"/"WhatsApp Default Reply" nunca se tocaron.**
 - **Hallazgo definitivo (logs + API):** cada llamada basura entra en el SEGUNDO EXACTO del `subscribed` del contacto (ej. 197290626 suscrito 21:36:14 → basura 21:36:14) y las mandan contactos nuevos con tag `lead-nuevo`; tras 1-2 basuras, el MISMO canal entrega texto real y el bot conversa normal (visto con 1231021514). Conclusión: **es la Solicitud externa legítima del default reply ("Bot IA Whats app") disparándose cuando `last_input_text` aún está vacío** (primer contacto sin texto: audio/imagen/sticker/entrada sin escribir) — ManyChat manda el template literal `{{last_input_text}}` cuando la variable no renderiza. Lo del 8-jul fue esto mismo a escala (form-leads que nunca escribieron).
