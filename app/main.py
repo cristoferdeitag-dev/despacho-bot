@@ -6,6 +6,7 @@ from app.config import settings
 from app.models import ManychatWebhookPayload
 from app.supabase_client import (
     get_or_create_customer,
+    maybe_set_source_from_text,
     get_conversation_history,
     save_message,
     block_customer,
@@ -497,6 +498,7 @@ def manychat_webhook(
             phone=payload.phone,
             first_name=payload.first_name,
         )
+        maybe_set_source_from_text(customer, payload.text or "")
 
         if payload.text.strip() == RESET_KEYWORD:
             deleted = reset_customer_conversation(customer["id"])

@@ -1,3 +1,5 @@
+import re
+
 from supabase import create_client, Client
 from app.config import settings
 
@@ -33,6 +35,38 @@ def get_or_create_customer(user_id: str, phone: str | None = None, first_name: s
         "stage": "lead_new",
     }).execute()
     return insert.data[0]
+
+
+# Atribución de fuente: la web añade una línea tipo "Los encontré en Google" al
+# mensaje precargado de WhatsApp (src/lib/tracking.js en despacho-web); aquí la
+# detectamos y llenamos first_source (solo la primera vez) + last_source/detail.
+SOURCE_PATTERNS = [
+    (re.compile(r"los encontr[eé] en google|vengo de google", re.I), "google_ads"),
+    (re.compile(r"los encontr[eé] en ([a-z0-9_.-]+)", re.I), None),  # grupo 1 = fuente
+    (re.compile(r"vi sus videos", re.I), "web_videos"),
+]
+
+
+def maybe_set_source_from_text(customer: dict, text: str) -> None:
+    if not text:
+        return
+    source = detail = None
+    for pat, fixed in SOURCE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            source = (fixed or m.group(1)).strip("_.-").lower()
+            detail = m.group(0)
+            break
+    if not source or customer.get("last_source") == source:
+        return
+    updates = {"last_source": source, "source_detail": detail}
+    if not customer.get("first_source"):
+        updates["first_source"] = source
+    try:
+        get_supabase().table("customers").update(updates).eq("id", customer["id"]).execute()
+        customer.update(updates)
+    except Exception:
+        pass  # la atribución jamás debe tumbar el turno del bot
 
 
 def get_conversation_history(customer_id: str, limit: int = 40) -> list[dict]:
