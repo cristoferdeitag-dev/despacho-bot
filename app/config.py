@@ -13,6 +13,11 @@ class Settings:
     LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
     PORT = int(os.getenv("PORT", "8000"))
 
+    # Notas de voz: el motor primario es whisper local del VPS; la API de
+    # OpenAI es solo fallback opcional (ver app/voice_transcribe.py).
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")
+
     # IDs específicos del workspace de ManyChat del Despacho. Se llenan después
     # de crear el flow + custom fields (ver README).
     MANYCHAT_AI_RESPONSE_FIELD_ID = os.getenv("MANYCHAT_AI_RESPONSE_FIELD_ID", "")

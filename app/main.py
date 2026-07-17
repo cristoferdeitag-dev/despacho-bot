@@ -21,6 +21,7 @@ from app.supabase_client import (
     reset_customer_conversation,
 )
 from app.claude_client import generate_reply, classify_inquiry
+from app.voice_transcribe import transcribe_audio_url, extract_audio_url
 from app.manychat_client import (
     set_bot_reply,
     notify_admin,
@@ -476,6 +477,35 @@ def manychat_webhook(
     """
     if settings.WEBHOOK_SECRET and x_webhook_secret != settings.WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    # ManyChat suele mandar la nota de voz como URL S3 en el TEXTO del
+    # mensaje (no en el custom field audio_url) — detectarla y tratarla
+    # como audio para transcribirla en vez de contestarle a un link.
+    if not payload.audio_url:
+        url_in_text = extract_audio_url(payload.text or "")
+        if url_in_text:
+            payload.audio_url = url_in_text
+            payload.text = (payload.text or "").replace(url_in_text, "").strip()
+
+    # Nota de voz: transcribir y usar el texto como mensaje del cliente.
+    if payload.audio_url:
+        logger.info(f"[voice_in] user_id={payload.user_id} url={payload.audio_url[:80]}")
+        transcribed = transcribe_audio_url(payload.audio_url)
+        if transcribed:
+            payload.text = transcribed
+            logger.info(f"[voice_ok] user_id={payload.user_id} text={transcribed[:120]!r}")
+        else:
+            logger.warning(f"[voice_fail] user_id={payload.user_id}")
+            if not (payload.text or "").strip():
+                # Solo había audio y falló la transcripción — avisa al cliente
+                try:
+                    set_bot_reply(
+                        subscriber_id=payload.user_id,
+                        text="No pude escuchar su nota de voz. ¿Me lo puede escribir? 🙏",
+                    )
+                except Exception:
+                    pass
+                return {"status": "voice_failed"}
 
     logger.info(f"Mensaje de {payload.user_id}: {payload.text[:80]}")
 

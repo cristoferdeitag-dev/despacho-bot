@@ -17,11 +17,14 @@ class ManychatWebhookPayload(BaseModel):
     Recomendado mínimo: user_id, text, first_name, phone, channel.
     """
     user_id: str
-    text: str
+    text: str = ""  # puede venir vacío si solo hay nota de voz
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
     channel: Optional[str] = "whatsapp"  # whatsapp | instagram | messenger
+    # URL de nota de voz (custom field last_audio_url de ManyChat). En la
+    # práctica la URL suele llegar dentro de `text` — ver extract_audio_url().
+    audio_url: Optional[str] = None
 
 
 class BotReply(BaseModel):
