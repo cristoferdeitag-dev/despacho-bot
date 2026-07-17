@@ -110,6 +110,18 @@ HUMAN_HANDOFF_STAGES = {
 # ManyChat (recordatorio 1sem/2sem/1mes, SIN borrado).
 REMARKETING_TAG = "remarketing"
 REMARKETING_STOP_CATEGORIES = {"INTERESADO", "REGULARIZACION", "CLIENTE", "NO_INTERESADO", "SEGUIMIENTO"}
+# 🔁 Esencia de los recordatorios que manda la secuencia "Remarketing" por ManyChat
+# (R1 20h + R2 2d) — fuera del bot, así que NO están en su historial. Cuando un lead
+# con la etiqueta `remarketing` ESCRIBE, es que responde a esto; se lo pasamos a Claude
+# como contexto para que no lo salude como nuevo ni conteste fuera de lugar. Un solo
+# lugar a editar si cambia el copy de la secuencia.
+REMARKETING_LAST_REMINDER = (
+    "Le escribimos por WhatsApp para reengancharlo: le recordamos que no atender su "
+    "situación fiscal a tiempo con el SAT puede salir más caro, y le pedimos que nos "
+    "cuente su caso (regularización, declaraciones, deudas, dudas con el SAT o poner todo "
+    "en orden) para revisarlo y decirle el mejor camino. Cerramos con «¿Quiere que le "
+    "ayudemos a revisarlo?»."
+)
 
 # Keyword exacto que un usuario puede mandar para resetear su conversación
 # entera en pruebas. No usar palabras que un cliente real podría escribir.
@@ -296,6 +308,7 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
         # aterrizó): el bot SOLO atiende contactos con etiqueta `lead-nuevo`.
         # Clientes viejos / conversaciones previas no la tienen → el bot se queda
         # callado y NUNCA les escribe. Fail-safe: si falla leer tags, silencio.
+        from_remarketing = False
         if (payload.channel or "whatsapp") == "whatsapp":
             try:
                 wa_tags = get_subscriber_tags(payload.user_id)
@@ -312,6 +325,11 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             # (Regla "CANCELAR" lo desuscribe de la secuencia). Si al final NO cerró,
             # se la reponemos abajo → re-arma el contador desde ESTE mensaje. Así el
             # borrado automático SOLO alcanza a quien de verdad nunca contestó.
+            # Si traía la etiqueta, es que responde a un recordatorio de la secuencia
+            # → marcamos el flag para pasarle a Claude ese contexto (el bot no lo tiene
+            # en su historial porque la secuencia lo manda por ManyChat, no él).
+            if REMARKETING_TAG in wa_tags:
+                from_remarketing = True
             try:
                 remove_tag(payload.user_id, REMARKETING_TAG)
             except Exception as e:
@@ -369,6 +387,7 @@ def _process_user_turn(customer: dict, payload: ManychatWebhookPayload, my_msg_i
             channel=channel,
             phone=customer.get("phone"),
             customer_stage=customer.get("stage"),
+            remarketing_context=REMARKETING_LAST_REMINDER if from_remarketing else None,
         )
         reply_clean, block_action = extract_block_action(reply_raw)
         reply_clean, escalation_category = extract_escalation(reply_clean)

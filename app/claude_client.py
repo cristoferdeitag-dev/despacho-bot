@@ -544,6 +544,7 @@ def build_system_prompt(
     channel: str = "whatsapp",
     phone: str | None = None,
     customer_stage: str | None = None,
+    remarketing_context: str | None = None,
 ) -> str:
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -596,7 +597,27 @@ def build_system_prompt(
         f"«[Nombre]» ni corchetes. Si el nombre es «Amigo» (no lo conoces), mejor OMITE "
         f"el nombre y no pongas ningún marcador.\n"
     )
-    return user_block + current_time_block + channel_block + stage_block
+    # 🔁 Puente de remarketing: la secuencia "Remarketing" (ManyChat) le manda al
+    # lead recordatorios que NO se guardan en el historial del bot → el bot queda
+    # ciego y responde fuera de contexto. Le damos aquí lo último que le dijimos.
+    remarketing_block = ""
+    if remarketing_context:
+        remarketing_block = (
+            "\n# ⚠️ CONTEXTO DE REMARKETING (LEER CON CUIDADO)\n"
+            "Este lead estaba \"frío\" y lo REENGANCHAMOS por WhatsApp con la secuencia de "
+            "remarketing. Ese mensaje NO aparece en el historial de arriba (lo manda ManyChat, "
+            "no usted), pero el ÚLTIMO mensaje que le enviamos fue este recordatorio:\n"
+            f"«{remarketing_context}»\n"
+            "Su mensaje actual es MUY PROBABLEMENTE una respuesta a ESO. Interprételo así:\n"
+            "- Si dice \"sí / claro / me interesa / adelante\" o cuenta su situación → está "
+            "RETOMANDO por ese recordatorio y quiere ayuda con su tema fiscal. Continúe cálido, "
+            "reconozca que le escribimos, y pídale que le cuente su caso para orientarlo. *NO lo "
+            "salude como si fuera nuevo* ni reinicie el cuestionario desde cero.\n"
+            "- Si pregunta algo → respóndalo dentro de ESE hilo.\n"
+            "- Retome el flujo normal DESPUÉS, con naturalidad.\n"
+        )
+
+    return user_block + current_time_block + channel_block + stage_block + remarketing_block
 
 
 NON_SERVICE_CATEGORIES = {
@@ -669,10 +690,11 @@ def _fix_name_placeholder(text: str, user_name: str | None) -> str:
 
 def generate_reply(history: list[dict], new_user_message: str, user_name: str | None = None,
                    channel: str = "whatsapp", phone: str | None = None,
-                   customer_stage: str | None = None) -> str:
+                   customer_stage: str | None = None,
+                   remarketing_context: str | None = None) -> str:
     client = get_anthropic_client()
-    messages = build_messages(history, new_user_message)
-    dynamic_block = build_system_prompt(user_name, channel, phone, customer_stage)
+    messages = build_messages(history, new_user_message, remarketing_context)
+    dynamic_block = build_system_prompt(user_name, channel, phone, customer_stage, remarketing_context)
 
     response = client.messages.create(
         model=settings.LLM_MODEL,
@@ -695,9 +717,24 @@ def generate_reply(history: list[dict], new_user_message: str, user_name: str | 
     return "Disculpe, tuve un problema procesando su mensaje. ¿Podría intentar de nuevo?"
 
 
-def build_messages(history: list[dict], new_user_message: str) -> list[dict]:
+def build_messages(history: list[dict], new_user_message: str,
+                   remarketing_context: str | None = None) -> list[dict]:
     messages = []
     for m in history:
         messages.append({"role": m["role"], "content": m["content"]})
+
+    # 🔁 Puente de remarketing: inyecta el recordatorio de la secuencia (que
+    # ManyChat mandó fuera del bot y NO está en el historial) como lo ÚLTIMO que
+    # dijo el asistente, para que el modelo interprete bien la respuesta del lead.
+    # Anthropic exige roles alternados y el historial suele cerrar en `assistant`,
+    # así que lo FUSIONAMOS con ese último turno (o lo agregamos si cierra en user).
+    if remarketing_context:
+        if messages and messages[-1]["role"] == "assistant":
+            messages[-1]["content"] = (
+                messages[-1]["content"].rstrip() + "\n\n" + remarketing_context
+            )
+        else:
+            messages.append({"role": "assistant", "content": remarketing_context})
+
     messages.append({"role": "user", "content": new_user_message})
     return messages
