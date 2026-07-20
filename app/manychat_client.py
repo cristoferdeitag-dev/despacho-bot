@@ -213,6 +213,12 @@ def remove_tag(subscriber_id: str, tag_name: str) -> bool:
         if response.status_code == 200 and response.json().get("status") == "success":
             logger.info(f"Tag {tag_name!r} quitado de {subscriber_id}")
             return True
+        # ManyChat regresa 400 "Can not remove tag from subscriber" cuando el
+        # suscriptor NO tiene el tag — para nosotros eso es éxito idempotente
+        # (el estado deseado ya se cumple), no un error que ensucie el log.
+        if "Can not remove tag" in response.text:
+            logger.info(f"Tag {tag_name!r} no estaba en {subscriber_id} — nada que quitar")
+            return True
         logger.error(f"Error quitando tag {tag_name!r}: {response.status_code} — {response.text[:300]}")
         return False
     except Exception as e:
